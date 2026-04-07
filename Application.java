@@ -4,8 +4,8 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class VulnApplication {
+public class Application {
     public static void main(String[] args) {
-        SpringApplication.run(VulnApplication.class, args);
+        SpringApplication.run(Application.class, args);
     }
 }
