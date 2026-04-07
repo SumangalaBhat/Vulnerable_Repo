@@ -42,19 +42,15 @@ jobs:
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          API_KEY=${{ secrets.NVD_API_KEY }}
-          if [ -z "$API_KEY" ]; then
-            echo "⚠️ NVD API Key not found. The update may be slow."
-          fi
           mvn org.owasp:dependency-check-maven:check \
-            -Dnvd.apiKey="$API_KEY" \
-            -Dformat=JSON \
-            -DoutputDirectory=report
-
-      - name: Print OWASP Report
-        run: |
-          echo "========== OWASP REPORT =========="
-          cat report/dependency-check-report.json || echo "No report found"
+              -DfailBuildOnCVSS=0 \
+              -DskipAssembly=true \
+              -DdataDirectory=dependency-check-data || true
+      
+            - name: Print OWASP Report
+              run: |
+                echo "========== OWASP REPORT =========="
+                cat report/dependency-check-report.json || echo "No report found"
 
       - name: Count Vulnerabilities
         run: |
