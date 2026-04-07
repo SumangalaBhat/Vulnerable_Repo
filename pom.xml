@@ -41,6 +41,7 @@
     <configuration>
         <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey> <!-- camelCase is mandatory -->
         <format>JSON</format>
+        <dataDirectory>${project.basedir}/dependency-check-data</dataDirectory>
         <outputDirectory>${project.build.directory}/dependency-check-report</outputDirectory>
         <failBuildOnCVSS>0</failBuildOnCVSS>
     </configuration>
