@@ -42,7 +42,7 @@ jobs:
         env:
           NVD_API_KEY: 5A0FFD7C-4E32-F111-8369-129478FCB64D
         run: |
-          API_KEY="${NVD_API_KEY:-}"
+          API_KEY=5A0FFD7C-4E32-F111-8369-129478FCB64D
           if [ -z "$API_KEY" ]; then
             echo "⚠️ NVD API Key not found. The update may be slow."
           fi
