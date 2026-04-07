@@ -1,0 +1,29 @@
+using Microsoft.AspNetCore.Mvc;
+using System.Data.SqlClient;
+
+namespace VulnerableApp.Controllers
+{
+    [ApiController]
+    [Route("[controller]")]
+    public class UserController : ControllerBase
+    {
+        [HttpGet("{username}")]
+        public IActionResult GetUser(string username)
+        {
+            // ❌ Vulnerable: Direct string concatenation in SQL query
+            string connectionString = "Server=localhost;Database=Users;Trusted_Connection=True;";
+            using (SqlConnection conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+                string query = $"SELECT * FROM Users WHERE Username = '{username}'"; // SQL Injection risk
+                SqlCommand cmd = new SqlCommand(query, conn);
+                var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return Ok(new { Username = reader["Username"], Email = reader["Email"] });
+                }
+            }
+            return NotFound();
+        }
+    }
+}
