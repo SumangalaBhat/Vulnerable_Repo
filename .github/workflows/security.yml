@@ -5,10 +5,6 @@ on:
   pull_request:
 
 jobs:
-
-  # -----------------------------
-  # Stage 1: Build
-  # -----------------------------
   build:
     name: Build Stage
     runs-on: ubuntu-latest
@@ -26,10 +22,6 @@ jobs:
       - name: Build Project
         run: mvn clean install -DskipTests
 
-
-  # -----------------------------
-  # Stage 2: OWASP Dependency Scan
-  # -----------------------------
   dependency-scan:
     name: OWASP Dependency Scan
     runs-on: ubuntu-latest
@@ -77,10 +69,6 @@ jobs:
           echo "Total vulnerabilities: $COUNT"
           echo "VULN_COUNT=$COUNT" >> $GITHUB_ENV
 
-
-  # -----------------------------
-  # Stage 3: SpotBugs Static Analysis
-  # -----------------------------
   static-analysis:
     name: SpotBugs Scan
     runs-on: ubuntu-latest
@@ -107,9 +95,6 @@ jobs:
           cat target/spotbugsXml.xml || echo "No report found"
 
 
-  # -----------------------------
-  # Stage 4: Custom Code Scan
-  # -----------------------------
   custom-scan:
     name: Custom Vulnerability Scan
     runs-on: ubuntu-latest
@@ -136,9 +121,6 @@ jobs:
           grep -R "FileReader" src || echo "None found"
 
 
-  # -----------------------------
-  # Stage 5: Security Fail Gate
-  # -----------------------------
   fail-gate:
     name: Security Gate
     runs-on: ubuntu-latest
