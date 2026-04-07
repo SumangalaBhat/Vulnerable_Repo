@@ -20,7 +20,7 @@ jobs:
           java-version: 11
 
       - name: Build Project
-        run: mvn clean install -DskipTests
+        run: mvn install -DskipTests
 
   dependency-scan:
     name: OWASP Dependency Scan
@@ -37,26 +37,19 @@ jobs:
           distribution: temurin
           java-version: 11
 
-      # 🔹 Debug NVD API Key
-      - name: Debug NVD API Key
-        run: |
-          echo "NVD_API_KEY='$NVD_API_KEY'"
-          if [ -z "$NVD_API_KEY" ]; then
-            echo "❌ NVD_API_KEY is empty"
-          else
-            echo "✅ NVD_API_KEY is set"
-          fi
-
-      # 🔹 Run OWASP Dependency Check safely
+     # 🔹 Run OWASP Dependency Check safely
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          echo "Running OWASP Dependency Check..."
+          API_KEY="${NVD_API_KEY:-}"
+          if [ -z "$API_KEY" ]; then
+            echo "⚠️ NVD API Key not found. The update may be slow."
+          fi
           mvn org.owasp:dependency-check-maven:check \
-            -Dnvd.apiKey=${NVD_API_KEY:-""} \
+            -Dnvd.apiKey="$API_KEY" \
             -Dformat=JSON \
-            -DoutputDirectory=report || true
+            -DoutputDirectory=report
 
       - name: Print OWASP Report
         run: |
