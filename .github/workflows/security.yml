@@ -41,16 +41,12 @@ jobs:
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          mvn org.owasp:dependency-check-maven:check \
-              -DfailBuildOnCVSS=0 \
-              -DskipAssembly=true \
-              -DdataDirectory=dependency-check-data || true
+        run: mvn org.owasp:dependency-check-maven:check
       
-            - name: Print OWASP Report
-              run: |
-                echo "========== OWASP REPORT =========="
-                cat report/dependency-check-report.json || echo "No report found"
+      - name: Print OWASP Report
+        run: |
+          echo "========== OWASP REPORT =========="
+              cat report/dependency-check-report.json || echo "No report found"
 
       - name: Count Vulnerabilities
         run: |
