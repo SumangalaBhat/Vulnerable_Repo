@@ -5,26 +5,40 @@ on:
   pull_request:
 
 jobs:
-  security-scan:
-    runs-on: ubuntu-latest
 
+  # 🔹 Stage 1: Checkout and Build
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      build-success: ${{ steps.build-step.outcome }}
     steps:
-      # 🔹 Step 1: Checkout code
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 🔹 Step 2: Setup Java
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 11
 
-      # 🔹 Step 3: Build project
       - name: Build Project
+        id: build-step
         run: mvn clean install -DskipTests
 
-      # 🔹 Step 4: OWASP Dependency Check (fail-safe)
+  # 🔹 Stage 2: OWASP Dependency Check
+  dependency-check:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 11
+
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
@@ -35,18 +49,16 @@ jobs:
               -DskipAssembly=true \
               -DdataDirectory=dependency-check-data || true
 
-      # 🔹 Step 5: Print Dependency Check Report
       - name: Print Dependency Check Report
         run: |
-          echo "========== OWASP REPORT =========="
           REPORT_FILE="target/dependency-check-report/dependency-check-report.json"
+          echo "========== OWASP REPORT =========="
           if [ -f "$REPORT_FILE" ]; then
             cat "$REPORT_FILE"
           else
             echo "No report generated (NVD feed unreachable)"
           fi
 
-      # 🔹 Step 6: Count OWASP Vulnerabilities
       - name: Count Vulnerabilities
         run: |
           REPORT_FILE="target/dependency-check-report/dependency-check-report.json"
@@ -57,11 +69,23 @@ jobs:
             echo "Total vulnerabilities: 0"
           fi
 
-      # 🔹 Step 7: Run SpotBugs
+  # 🔹 Stage 3: SpotBugs Analysis
+  spotbugs:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 11
+
       - name: Run SpotBugs
         run: mvn com.github.spotbugs:spotbugs-maven-plugin:spotbugs || true
 
-      # 🔹 Step 8: Print SpotBugs Report
       - name: Print SpotBugs Report
         run: |
           REPORT_FILE="target/spotbugsXml.xml"
@@ -72,7 +96,14 @@ jobs:
             echo "No report generated"
           fi
 
-      # 🔹 Step 9: Custom code scan
+  # 🔹 Stage 4: Custom Code Scan
+  custom-scan:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
       - name: Custom Code Scan
         run: |
           echo "========== CUSTOM SCAN =========="
