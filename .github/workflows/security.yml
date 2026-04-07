@@ -22,7 +22,7 @@ jobs:
           java-version: 11
 
       - name: Build Project
-        run: mvn clean install -DskipTests
+        run: mvn clean install $NVD_API_KEY
 
 
   # 🔍 Stage 2: Dependency Vulnerability Scan
