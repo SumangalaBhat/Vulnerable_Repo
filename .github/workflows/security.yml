@@ -40,7 +40,7 @@ jobs:
      # 🔹 Run OWASP Dependency Check safely
       - name: Run OWASP Dependency Check
         env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          NVD_API_KEY: 5A0FFD7C-4E32-F111-8369-129478FCB64D
         run: |
           API_KEY="${NVD_API_KEY:-}"
           if [ -z "$API_KEY" ]; then
