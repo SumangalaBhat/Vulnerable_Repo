@@ -1,0 +1,85 @@
+name: Java Security Pipeline
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # 🔹 Step 1: Checkout code
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # 🔹 Step 2: Setup Java
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 11
+
+    # 🔹 Step 3: Build project
+    - name: Build Project
+      run: mvn clean install -DskipTests
+
+    # 🔹 Step 4: OWASP Dependency Check
+    - name: Run OWASP Scan
+      run: |
+        mvn org.owasp:dependency-check-maven:check \
+        -Dformat=JSON \
+        -DoutputDirectory=report || true
+
+    # 🔹 Step 5: Print OWASP report
+    - name: Print Dependency Vulnerabilities
+      run: |
+        echo "========== OWASP REPORT =========="
+        cat report/dependency-check-report.json || echo "No report"
+
+    # 🔹 Step 6: Count vulnerabilities
+    - name: Count Vulnerabilities
+      run: |
+        COUNT=$(jq '.dependencies[].vulnerabilities | length' report/dependency-check-report.json | awk '{sum+=$1} END {print sum}')
+        echo "Total vulnerabilities: $COUNT"
+
+    # 🔹 Step 7: SpotBugs scan
+    - name: Run SpotBugs
+      run: |
+        mvn com.github.spotbugs:spotbugs-maven-plugin:spotbugs || true
+
+    # 🔹 Step 8: Print SpotBugs
+    - name: Print SpotBugs Report
+      run: |
+        echo "========== SPOTBUGS REPORT =========="
+        cat target/spotbugsXml.xml || echo "No report"
+
+    # 🔹 Step 9: Custom vulnerability detection (code scan)
+    - name: Custom Code Scan
+      run: |
+        echo "========== CUSTOM SCAN =========="
+
+        echo "SQL Injection:"
+        grep -R "Statement" src || true
+
+        echo "Command Injection:"
+        grep -R "Runtime.getRuntime()" src || true
+
+        echo "Hardcoded Password:"
+        grep -R "root123" . || true
+
+        echo "Path Traversal:"
+        grep -R "FileReader" src || true
+
+    # 🔹 Step 10: Fail if vulnerabilities found
+    - name: Fail Pipeline
+      run: |
+        COUNT=$(jq '.dependencies[].vulnerabilities | length' report/dependency-check-report.json | awk '{sum+=$1} END {print sum}')
+
+        if [ "$COUNT" -gt 0 ]; then
+          echo "❌ Vulnerabilities detected. Failing build."
+          exit 1
+        else
+          echo "✅ No vulnerabilities"
+        fi
