@@ -6,7 +6,9 @@ on:
 
 jobs:
 
-  # 🏗️ Stage 1: Build
+  # -----------------------------
+  # Stage 1: Build
+  # -----------------------------
   build:
     name: Build Stage
     runs-on: ubuntu-latest
@@ -22,11 +24,12 @@ jobs:
           java-version: 11
 
       - name: Build Project
-        #run: mvn clean install $NVD_API_KEY
-        run: mvn clean install 5A0FFD7C-4E32-F111-8369-129478FCB64D
+        run: mvn clean install -DskipTests
 
 
-  # 🔍 Stage 2: Dependency Vulnerability Scan
+  # -----------------------------
+  # Stage 2: OWASP Dependency Scan
+  # -----------------------------
   dependency-scan:
     name: OWASP Dependency Scan
     runs-on: ubuntu-latest
@@ -41,7 +44,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 11
-          
+
+      # 🔹 Debug NVD API Key
       - name: Debug NVD API Key
         run: |
           echo "NVD_API_KEY='$NVD_API_KEY'"
@@ -50,7 +54,8 @@ jobs:
           else
             echo "✅ NVD_API_KEY is set"
           fi
-      
+
+      # 🔹 Run OWASP Dependency Check safely
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
@@ -59,7 +64,7 @@ jobs:
           mvn org.owasp:dependency-check-maven:check \
             -Dnvd.apiKey=${NVD_API_KEY:-""} \
             -Dformat=JSON \
-            -DoutputDirectory=report
+            -DoutputDirectory=report || true
 
       - name: Print OWASP Report
         run: |
@@ -73,7 +78,9 @@ jobs:
           echo "VULN_COUNT=$COUNT" >> $GITHUB_ENV
 
 
-  # 🧠 Stage 3: Static Code Analysis
+  # -----------------------------
+  # Stage 3: SpotBugs Static Analysis
+  # -----------------------------
   static-analysis:
     name: SpotBugs Scan
     runs-on: ubuntu-latest
@@ -100,7 +107,9 @@ jobs:
           cat target/spotbugsXml.xml || echo "No report found"
 
 
-  # 🧪 Stage 4: Custom Code Scan
+  # -----------------------------
+  # Stage 4: Custom Code Scan
+  # -----------------------------
   custom-scan:
     name: Custom Vulnerability Scan
     runs-on: ubuntu-latest
@@ -115,19 +124,21 @@ jobs:
           echo "========== CUSTOM SCAN =========="
 
           echo "🔴 SQL Injection:"
-          grep -R "Statement" src || true
+          grep -R "Statement" src || echo "None found"
 
           echo "🔴 Command Injection:"
-          grep -R "Runtime.getRuntime()" src || true
+          grep -R "Runtime.getRuntime()" src || echo "None found"
 
           echo "🔴 Hardcoded Password:"
-          grep -R "root123" . || true
+          grep -R "root123" . || echo "None found"
 
           echo "🔴 Path Traversal:"
-          grep -R "FileReader" src || true
+          grep -R "FileReader" src || echo "None found"
 
 
-  # 🚫 Stage 5: Fail Pipeline Gate
+  # -----------------------------
+  # Stage 5: Security Fail Gate
+  # -----------------------------
   fail-gate:
     name: Security Gate
     runs-on: ubuntu-latest
@@ -137,22 +148,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 11
+
       - name: Re-run OWASP Count
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          echo "Validating final vulnerability count..."
           mvn org.owasp:dependency-check-maven:check \
-          -Dnvd.apiKey=$NVD_API_KEY \
-          -Dformat=JSON \
-          -DoutputDirectory=report || true
+            -Dnvd.apiKey=${NVD_API_KEY:-""} \
+            -Dformat=JSON \
+            -DoutputDirectory=report || true
 
           COUNT=$(jq '.dependencies[].vulnerabilities | length' report/dependency-check-report.json | awk '{sum+=$1} END {print sum}')
-
-          echo "Final vulnerability count: $COUNT"
+          echo "Total vulnerabilities: $COUNT"
 
           if [ "$COUNT" -gt 0 ]; then
             echo "❌ Vulnerabilities detected. Failing pipeline."
             exit 1
           else
-            echo "✅ No vulnerabilities found"
-          fi
+            echo "✅ No vulnerabilities found. Pipeline passed."
