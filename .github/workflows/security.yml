@@ -43,21 +43,22 @@ jobs:
           
       - name: Debug NVD API Key
         run: |
-         if [ -z "$NVD_API_KEY" ]; then
-         echo "❌ NVD_API_KEY is empty"
-         else
-         echo "✅ NVD_API_KEY is set"
-         fi
-
+          echo "NVD_API_KEY='$NVD_API_KEY'"
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "❌ NVD_API_KEY is empty"
+          else
+            echo "✅ NVD_API_KEY is set"
+          fi
+      
       - name: Run OWASP Dependency Check
         env:
-         NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-           echo "Running OWASP Dependency Check..."
-            mvn org.owasp:dependency-check-maven:check \
-           -Dnvd.apiKey=${NVD_API_KEY:-""} \
-           -Dformat=JSON \
-           -DoutputDirectory=report || true
+          echo "Running OWASP Dependency Check..."
+          mvn org.owasp:dependency-check-maven:check \
+            -Dnvd.apiKey=${NVD_API_KEY:-""} \
+            -Dformat=JSON \
+            -DoutputDirectory=report
 
       - name: Print OWASP Report
         run: |
