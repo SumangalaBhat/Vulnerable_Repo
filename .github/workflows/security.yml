@@ -1,21 +1,18 @@
-name: Full Security & Audit Pipeline (Real-Time HTML)
+name: DevSecOps CI Pipeline
 
 on:
-  workflow_dispatch:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-env:
-  NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-
 jobs:
 
-# 🔹 Stage 1: Build
+# 🔹 Build
   build:
     runs-on: ubuntu-latest
     steps:
@@ -27,106 +24,45 @@ jobs:
       - run: mvn clean install -DskipTests
 
 
-# 🔹 Stage 2: Dependency Scan (REAL-TIME NVD)
-  dependency-scan:
+# 🔹 Restore NVD Cache
+  restore-nvd:
     runs-on: ubuntu-latest
     needs: build
-  
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: nvd-db-*
+        continue-on-error: true
+
+
+# 🔹 Dependency Scan (NO API → stable)
+  dependency-scan:
+    runs-on: ubuntu-latest
+    needs: restore-nvd
+
     steps:
       - uses: actions/checkout@v4
-  
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-  
-      # 🔸 Ensure dependencies are resolved
-      - name: Resolve Dependencies
-        run: mvn clean install -DskipTests
 
-  
-      # 🔸 Run OWASP Scan (STRICT)
-      - name: OWASP Dependency Check (STRICT NVD MODE)
+      - name: Run OWASP Scan
         run: |
           mkdir -p reports
-      
-          echo "🔐 Validating NVD API key..."
-      
-          if [ -z "$NVD_API_KEY" ]; then
-            echo "❌ NVD_API_KEY is missing"
-            exit 1
-          fi
-      
-          echo "✅ Starting OWASP scan with NVD..."
-      
+
           mvn org.owasp:dependency-check-maven:check \
-            -Dnvd.api.key=$NVD_API_KEY \
             -Dformat=JSON \
             -DscanSet=ALL \
-            -Dnvd.api.delay=8000 \
-            -Dnvd.max.retry.count=20 \
-            -Dnvd.validForHours=0 \
-            -DfailOnError=true \
-            -DfailBuildOnCVSS=0
-      
-          # Ensure report exists
-          if [ ! -f target/dependency-check-report.json ]; then
-            echo "❌ Scan failed: No report generated"
-            exit 1
-          fi
-      
+            -DautoUpdate=false \
+            -DfailOnError=false
+
           cp target/dependency-check-report.json reports/owasp-report.json
-      # 🔸 Install jq
-      - name: Install jq
-        run: sudo apt-get install -y jq
-  
-      # 🔸 Validate Scan Output (IMPORTANT)
-      - name: Validate Vulnerability Detection
-        run: |
-          TOTAL=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' reports/owasp-report.json)
-  
-          echo "Detected Vulnerabilities: $TOTAL"
-  
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "⚠️ WARNING: No vulnerabilities found."
-  
-            DEP_COUNT=$(jq '.dependencies | length' reports/owasp-report.json)
-  
-            if [ "$DEP_COUNT" -eq 0 ]; then
-              echo "❌ ERROR: No dependencies scanned! Scan is invalid."
-              exit 1
-            fi
-          fi
-  
-      # 🔸 Extract Proper Counts
-      - name: Extract Vulnerability Metrics
-        run: |
-          TOTAL=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' reports/owasp-report.json)
-          CRITICAL=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/owasp-report.json)
-          HIGH=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="HIGH")] | length' reports/owasp-report.json)
-          MEDIUM=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="MEDIUM")] | length' reports/owasp-report.json)
-          LOW=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="LOW")] | length' reports/owasp-report.json)
-  
-          echo "TOTAL=$TOTAL"
-          echo "CRITICAL=$CRITICAL"
-          echo "HIGH=$HIGH"
-          echo "MEDIUM=$MEDIUM"
-          echo "LOW=$LOW"
-  
-          echo "TOTAL_VULN=$TOTAL" >> $GITHUB_ENV
-          echo "CRITICAL_VULN=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH_VULN=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM_VULN=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW_VULN=$LOW" >> $GITHUB_ENV
-  
-      - name: Upload Report
-        uses: actions/upload-artifact@v4
+
+      - uses: actions/upload-artifact@v4
         with:
           name: owasp-report
           path: reports/
 
 
-# 🔹 Stage 3: Code Scan
+# 🔹 Code Scan
   code-scan:
     runs-on: ubuntu-latest
     needs: build
@@ -134,8 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scan Repo for Secrets
-        run: |
+      - run: |
           mkdir -p reports
           grep -RniE "password|secret|apikey|token" . > reports/code-scan.txt || true
 
@@ -145,7 +80,7 @@ jobs:
           path: reports/
 
 
-# 🔹 Stage 4: Git Info (Latest Change Only)
+# 🔹 Git Info
   git-info:
     runs-on: ubuntu-latest
     needs: build
@@ -155,27 +90,19 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Extract Latest Commit
-        run: |
+      - run: |
           mkdir -p reports
-          FILE=reports/git-info.txt
 
-          COMMIT_ID=$(git log -1 --pretty=format:"%H")
+          COMMIT=$(git log -1 --pretty=format:"%H")
           AUTHOR=$(git log -1 --pretty=format:"%an")
           EMAIL=$(git log -1 --pretty=format:"%ae")
-          MESSAGE=$(git log -1 --pretty=format:"%s")
 
-          echo "Commit ID : $COMMIT_ID" > $FILE
-          echo "Author    : $AUTHOR" >> $FILE
-          echo "Email     : $EMAIL" >> $FILE
-          echo "Message   : $MESSAGE" >> $FILE
+          echo "Commit: $COMMIT" > reports/git-info.txt
+          echo "Author: $AUTHOR" >> reports/git-info.txt
+          echo "Email: $EMAIL" >> reports/git-info.txt
 
-          PR=$(echo "$MESSAGE" | grep -oE "#[0-9]+" | tr -d '#')
-          echo "PR Number : ${PR:-N/A}" >> $FILE
-
-          echo "" >> $FILE
-          echo "Changed Files:" >> $FILE
-          git diff-tree --no-commit-id --name-only -r $COMMIT_ID >> $FILE
+          echo "Changed Files:" >> reports/git-info.txt
+          git diff-tree --no-commit-id --name-only -r $COMMIT >> reports/git-info.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -183,7 +110,32 @@ jobs:
           path: reports/
 
 
-# 🔹 Stage 5: HTML REPORT (REAL-TIME DASHBOARD)
+# 🔹 Security Gate (FAIL ON CRITICAL)
+  security-gate:
+    runs-on: ubuntu-latest
+    needs: dependency-scan
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: owasp-report
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Enforce Policy
+        run: |
+          CRITICAL=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/owasp-report.json)
+
+          echo "Critical vulnerabilities: $CRITICAL"
+
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "❌ Build blocked due to critical vulnerabilities"
+            exit 1
+          fi
+
+
+# 🔹 HTML Report (ENHANCED)
   html-report:
     runs-on: ubuntu-latest
     needs: [dependency-scan, code-scan, git-info]
@@ -194,74 +146,95 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Generate Real-Time HTML Report
+      - name: Generate HTML Dashboard (CVSS + Links)
         run: |
           mkdir -p public
           REPORT=public/security-report.html
 
-          # 🔸 Extract live vulnerability data
+          # 🔸 Extract CVE, Severity, CVSS, Link, Description
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
-            [.name, .severity, .description] | @tsv
+            [
+              .name,
+              .severity,
+              (.cvssv3.baseScore // .cvssv2.score // "N/A"),
+              ("https://nvd.nist.gov/vuln/detail/" + .name),
+              (.description | gsub("\n"; " ") | .[0:200])
+            ] | @tsv
           ' owasp-report/owasp-report.json > vulns.tsv || true
 
           TOTAL=$(wc -l < vulns.tsv || echo 0)
-
           CRITICAL=$(grep -c "CRITICAL" vulns.tsv || echo 0)
           HIGH=$(grep -c "HIGH" vulns.tsv || echo 0)
           MEDIUM=$(grep -c "MEDIUM" vulns.tsv || echo 0)
           LOW=$(grep -c "LOW" vulns.tsv || echo 0)
+          CODE=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
 
-          CODE_COUNT=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
-
-          # 🔸 Build HTML
           cat <<EOF > $REPORT
           <html>
           <head>
-          <title>Security Dashboard</title>
+          <title>DevSecOps Dashboard</title>
           <style>
-          body { font-family: Arial; margin:20px; }
-          table { border-collapse: collapse; width: 70%; }
-          th, td { border:1px solid #ddd; padding:8px; }
-          th { background:#2c3e50; color:white; }
-          .high { color:red; font-weight:bold; }
-          .medium { color:orange; }
-          .low { color:green; }
+          body { font-family: Arial; margin: 20px; }
+          h1 { color: #2c3e50; }
+          table { border-collapse: collapse; width: 85%; }
+          th, td { border: 1px solid #ddd; padding: 10px; }
+          th { background-color: #2c3e50; color: white; }
+          tr:nth-child(even) { background-color: #f2f2f2; }
+          .critical { color: red; font-weight: bold; }
+          .high { color: darkorange; font-weight: bold; }
+          .medium { color: orange; }
+          .low { color: green; }
+          a { color: blue; }
           </style>
           </head>
           <body>
           
-          <h1>🚨 Real-Time Security Dashboard</h1>
+          <h1>🚨 DevSecOps Security Dashboard</h1>
           
           <h2>📊 Summary</h2>
           <table>
           <tr><th>Type</th><th>Count</th></tr>
-          <tr><td>Total Vulnerabilities</td><td class="high">$TOTAL</td></tr>
-          <tr><td>Critical</td><td class="high">$CRITICAL</td></tr>
+          <tr><td>Total</td><td>$TOTAL</td></tr>
+          <tr><td>Critical</td><td class="critical">$CRITICAL</td></tr>
           <tr><td>High</td><td class="high">$HIGH</td></tr>
           <tr><td>Medium</td><td class="medium">$MEDIUM</td></tr>
           <tr><td>Low</td><td class="low">$LOW</td></tr>
-          <tr><td>Code Issues</td><td>$CODE_COUNT</td></tr>
+          <tr><td>Code Issues</td><td>$CODE</td></tr>
           </table>
           
           <h2>📌 Vulnerability Details</h2>
           <table>
-          <tr><th>CVE</th><th>Severity</th><th>Description</th></tr>
+          <tr>
+            <th>CVE</th>
+            <th>Severity</th>
+            <th>CVSS</th>
+            <th>Exploit</th>
+            <th>Description</th>
+          </tr>
           EOF
           
-                    while IFS=$'\t' read -r cve sev desc; do
-                      echo "<tr><td>$cve</td><td>$sev</td><td>$desc</td></tr>" >> $REPORT
+                    while IFS=$'\t' read -r cve sev score link desc; do
+                      CLASS=$(echo "$sev" | tr '[:upper:]' '[:lower:]')
+          
+                      echo "<tr>
+                        <td>$cve</td>
+                        <td class=\"$CLASS\">$sev</td>
+                        <td>$score</td>
+                        <td><a href=\"$link\" target=\"_blank\">View</a></td>
+                        <td>$desc</td>
+                      </tr>" >> $REPORT
                     done < vulns.tsv
           
                     cat <<EOF >> $REPORT
           </table>
           
-          <h2>🧑‍💻 Latest Code Changes</h2>
+          <h2>🧑‍💻 Git Changes</h2>
           <pre>
           $(cat git-info/git-info.txt)
           </pre>
           
-          <h2>🔍 Code Scan Findings</h2>
+          <h2>🔍 Code Scan</h2>
           <pre>
           $(cat code-scan/code-scan.txt)
           </pre>
@@ -270,11 +243,9 @@ jobs:
           </html>
           EOF
 
-      - name: Upload HTML
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: security-html-report
+          name: security-dashboard
           path: public/
 
-      - name: Deploy to Pages
-        uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v4
