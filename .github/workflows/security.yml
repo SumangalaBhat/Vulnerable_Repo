@@ -1,9 +1,10 @@
-name: Java Security Pipeline
+name: Java Security Pipeline (Child Pipeline)
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
-  
+
 permissions:
   contents: read
   pages: write
@@ -15,308 +16,114 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+      - run: mvn clean install -DskipTests
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+  # 🔹 Stage 2: Security Scans (Parallel Child Jobs)
+  security-scans:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        scan: [owasp, spotbugs, fullscan]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        if: matrix.scan != 'fullscan'
         with:
           distribution: temurin
           java-version: 11
 
-      - name: Build Project
-        run: mvn clean install -DskipTests
-
-  # 🔹 Stage 2: Git Metadata (Commit + PR Info)
-  git-info:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Capture Commit Details
+      - name: Run OWASP
+        if: matrix.scan == 'owasp'
         run: |
-          mkdir -p reports
-          echo "Author: $(git log -1 --pretty=format:'%an')" > reports/git-info.txt
-          echo "Email: $(git log -1 --pretty=format:'%ae')" >> reports/git-info.txt
-          echo "Message: $(git log -1 --pretty=format:'%s')" >> reports/git-info.txt
-          echo "Commit ID: $(git log -1 --pretty=format:'%H')" >> reports/git-info.txt
-
-      - name: Capture PR Changed Files
-        run: |
-          git fetch origin main || true
-          git diff --name-only origin/main...HEAD > reports/changed-files.txt || true
-
-      - name: Upload Git Metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: git-info
-          path: reports/
-
-  # 🔹 Stage 3: OWASP Dependency Scan
-  dependency-check:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-
-      - name: Run OWASP Dependency Check
-        run: mvn org.owasp:dependency-check-maven:check
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-
-      - name: Save OWASP Report
-        run: |
+          mvn org.owasp:dependency-check-maven:check
           mkdir -p reports
           cp target/dependency-check-report/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
 
-      - name: Upload OWASP Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: owasp-report
-          path: reports/owasp-report.json
-
-  # 🔹 Stage 4: SpotBugs Scan
-  spotbugs:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-
-      - name: Build Project
-        run: mvn clean install -DskipTests
-
       - name: Run SpotBugs
-        run: mvn com.github.spotbugs:spotbugs-maven-plugin:spotbugs || true
-
-      - name: Save SpotBugs Report
+        if: matrix.scan == 'spotbugs'
         run: |
+          mvn clean install -DskipTests
+          mvn com.github.spotbugs:spotbugs-maven-plugin:spotbugs || true
           mkdir -p reports
           cp target/spotbugsXml.xml reports/spotbugs-report.xml || echo "<empty/>" > reports/spotbugs-report.xml
 
-      - name: Upload SpotBugs Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: spotbugs-report
-          path: reports/spotbugs-report.xml
-
-  # 🔹 Stage 5: Full Repository Code Vulnerability Scan
-  full-code-scan:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Scan Entire Repository
+      - name: Run Full Scan
+        if: matrix.scan == 'fullscan'
         run: |
           mkdir -p reports
           REPORT=reports/full-code-scan.txt
+          echo "Full Scan" > $REPORT
+          grep -R "password" . >> $REPORT || true
 
-          echo "========== FULL REPO CODE SCAN ==========" > $REPORT
-
-          echo "\n[SQL Injection Patterns]" >> $REPORT
-          grep -R "Statement" . >> $REPORT || true
-
-          echo "\n[Command Injection]" >> $REPORT
-          grep -R "Runtime.getRuntime()" . >> $REPORT || true
-
-          echo "\n[Hardcoded Secrets]" >> $REPORT
-          grep -R -i "password" . >> $REPORT || true
-
-          echo "\n[Path Traversal]" >> $REPORT
-          grep -R "FileReader" . >> $REPORT || true
-
-      - name: Upload Full Scan Report
+      - name: Upload Reports
         uses: actions/upload-artifact@v4
         with:
-          name: full-code-scan
-          path: reports/full-code-scan.txt
+          name: ${{ matrix.scan }}
+          path: reports/
 
-  # 🔹 Stage 6: Final Text Report
-  final-report:
-    runs-on: ubuntu-latest
-    needs: [git-info, dependency-check, spotbugs, full-code-scan]
-    steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Generate Combined Report
-        run: |
-          mkdir -p final-report
-          REPORT=final-report/security-summary.txt
-
-          echo "========== FINAL SECURITY REPORT ==========" > $REPORT
-
-          echo "\n--- Git Info ---" >> $REPORT
-          cat git-info/git-info.txt >> $REPORT || true
-
-          echo "\n--- Changed Files ---" >> $REPORT
-          cat git-info/changed-files.txt >> $REPORT || true
-
-          echo "\n--- OWASP ---" >> $REPORT
-          cat owasp-report/owasp-report.json >> $REPORT || true
-
-          echo "\n--- SpotBugs ---" >> $REPORT
-          cat spotbugs-report/spotbugs-report.xml >> $REPORT || true
-
-          echo "\n--- Full Code Scan ---" >> $REPORT
-          cat full-code-scan/full-code-scan.txt >> $REPORT || true
-
-      - name: Upload Final Text Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-security-report
-          path: final-report/security-summary.txt
-
-  # 🔹 Stage 7: HTML Dashboard + Live Link
+  # 🔹 Stage 3: Final HTML Report (Child Aggregator)
   html-report:
     runs-on: ubuntu-latest
-    needs: final-report
-
+    needs: security-scans
 
     steps:
-      # Step 1: Checkout (needed for Pages)
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Step 2: Download artifacts
-      - name: Download All Artifacts
+      - name: Download All Reports
         uses: actions/download-artifact@v4
 
-      # Step 3: Generate HTML Dashboard
-      - name: Generate HTML Dashboard
+      # ✅ Generate HTML Report
+      - name: Generate HTML Report
         run: |
           mkdir -p public
           REPORT=public/security-report.html
 
-          # ---- Extract counts ----
-          OWASP_COUNT=$(jq '[.dependencies[].vulnerabilities | length] | add' owasp-report/owasp-report.json 2>/dev/null || echo 0)
-          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs-report/spotbugs-report.xml 2>/dev/null || echo 0)
-          FULL_SCAN_COUNT=$(grep -c ":" full-code-scan/full-code-scan.txt 2>/dev/null || echo 0)
+          OWASP_COUNT=$(jq '[.dependencies[].vulnerabilities | length] | add' owasp/owasp-report.json 2>/dev/null || echo 0)
+          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs/spotbugs-report.xml 2>/dev/null || echo 0)
+          FULL_SCAN_COUNT=$(wc -l fullscan/full-code-scan.txt 2>/dev/null | awk '{print $1}' || echo 0)
 
-          # ---- HTML ----
-          echo "<html><head><title>Security Dashboard</title>" > $REPORT
-          echo "<style>
-          body { font-family: Arial; margin: 20px; }
-          table { border-collapse: collapse; width: 90%; }
-          th, td { border: 1px solid #ddd; padding: 8px; }
-          th { background-color: #2c3e50; color: white; }
-          </style></head><body>" >> $REPORT
-
+          echo "<html><head><title>Security Dashboard</title></head><body>" > $REPORT
           echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
 
-          echo "<h2>📊 Summary</h2>" >> $REPORT
-          echo "<table>" >> $REPORT
-          echo "<tr><th>Type</th><th>Count</th></tr>" >> $REPORT
+          echo "<table border='1'><tr><th>Type</th><th>Count</th></tr>" >> $REPORT
           echo "<tr><td>OWASP</td><td>$OWASP_COUNT</td></tr>" >> $REPORT
           echo "<tr><td>SpotBugs</td><td>$SPOTBUGS_COUNT</td></tr>" >> $REPORT
           echo "<tr><td>Code Scan</td><td>$FULL_SCAN_COUNT</td></tr>" >> $REPORT
           echo "</table>" >> $REPORT
 
-          # OWASP table
-          echo "<h2>OWASP Issues</h2><table><tr><th>Dependency</th><th>CVE</th><th>Severity</th></tr>" >> $REPORT
-          jq -r '.dependencies[] | select(.vulnerabilities) | .fileName as $d | .vulnerabilities[] | "<tr><td>\($d)</td><td>\(.name)</td><td>\(.severity)</td></tr>"' owasp-report/owasp-report.json >> $REPORT 2>/dev/null || true
-          echo "</table>" >> $REPORT
-
           echo "</body></html>" >> $REPORT
 
-      # Step 4: Upload Pages Artifact
-      - name: Upload GitHub Pages Artifact
-        uses: actions/upload-pages-artifact@v3
+      # ✅ Upload HTML for download
+      - name: Upload HTML Report Artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: public
+          name: security-html-report
+          path: public/security-report.html
 
-      # Step 5: Deploy to GitHub Pages
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      # Step 6: Print Live URL
-      - name: Show Live Report URL
-        run: |
-          echo "✅ Live Security Report:"
-          echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
-
-  html-live-report:
-    runs-on: ubuntu-latest
-    needs: final-report
-
-    # ✅ REQUIRED PERMISSIONS (FIX)
-
-    steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-
-      # Step 3: Generate HTML Dashboard
-      - name: Generate HTML Dashboard
-        run: |
-          mkdir -p public
-          REPORT=public/security-report.html
-
-          # ---- Extract counts ----
-          OWASP_COUNT=$(jq '[.dependencies[].vulnerabilities | length] | add' owasp-report/owasp-report.json 2>/dev/null || echo 0)
-          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs-report/spotbugs-report.xml 2>/dev/null || echo 0)
-          FULL_SCAN_COUNT=$(grep -c ":" full-code-scan/full-code-scan.txt 2>/dev/null || echo 0)
-
-          # ---- HTML ----
-          echo "<html><head><title>Security Dashboard</title>" > $REPORT
-          echo "<style>
-          body { font-family: Arial; margin: 20px; }
-          table { border-collapse: collapse; width: 90%; }
-          th, td { border: 1px solid #ddd; padding: 8px; }
-          th { background-color: #2c3e50; color: white; }
-          </style></head><body>" >> $REPORT
-
-          echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
-
-          echo "<h2>📊 Summary</h2>" >> $REPORT
-          echo "<table>" >> $REPORT
-          echo "<tr><th>Type</th><th>Count</th></tr>" >> $REPORT
-          echo "<tr><td>OWASP</td><td>$OWASP_COUNT</td></tr>" >> $REPORT
-          echo "<tr><td>SpotBugs</td><td>$SPOTBUGS_COUNT</td></tr>" >> $REPORT
-          echo "<tr><td>Code Scan</td><td>$FULL_SCAN_COUNT</td></tr>" >> $REPORT
-          echo "</table>" >> $REPORT
-
-          echo "<h2>OWASP Issues</h2><table><tr><th>Dependency</th><th>CVE</th><th>Severity</th></tr>" >> $REPORT
-          jq -r '.dependencies[] | select(.vulnerabilities) | .fileName as $d | .vulnerabilities[] | "<tr><td>\($d)</td><td>\(.name)</td><td>\(.severity)</td></tr>"' owasp-report/owasp-report.json >> $REPORT 2>/dev/null || true
-          echo "</table>" >> $REPORT
-
-          echo "</body></html>" >> $REPORT
-
-      # ✅ REQUIRED: Configure Pages (NO enablement, NO PAT)
+      # ✅ Setup Pages (NO enablement, NO token)
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      # Step 4: Upload Pages Artifact
+      # ✅ Upload for Pages
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
-      # Step 5: Deploy
+      # ✅ Deploy
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      # Step 6: Output URL
-      - name: Show Live Report URL
+      # ✅ Output URL
+      - name: Show Report URL
         run: |
-          echo "✅ Live Security Report:"
+          echo "🌐 Live Report:"
           echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
-
