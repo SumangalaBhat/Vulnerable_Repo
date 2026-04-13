@@ -179,89 +179,71 @@ jobs:
           name: final-security-report
           path: final-report/security-summary.txt
 
-  # 🔹 Stage 7: HTML Dashboard (Enhanced)
+  # 🔹 Stage 7: HTML Dashboard + Live Link
   html-report:
     runs-on: ubuntu-latest
     needs: final-report
 
     steps:
-      # Step 1: Download artifacts
+      # Step 1: Checkout (needed for Pages)
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 2: Download artifacts
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
 
-      # Step 2: Generate HTML Dashboard with Table
+      # Step 3: Generate HTML Dashboard
       - name: Generate HTML Dashboard
         run: |
-          mkdir -p final-report
-          REPORT=final-report/security-report.html
+          mkdir -p public
+          REPORT=public/security-report.html
 
           # ---- Extract counts ----
           OWASP_COUNT=$(jq '[.dependencies[].vulnerabilities | length] | add' owasp-report/owasp-report.json 2>/dev/null || echo 0)
           SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs-report/spotbugs-report.xml 2>/dev/null || echo 0)
           FULL_SCAN_COUNT=$(grep -c ":" full-code-scan/full-code-scan.txt 2>/dev/null || echo 0)
 
-          # ---- HTML Start ----
+          # ---- HTML ----
           echo "<html><head><title>Security Dashboard</title>" > $REPORT
           echo "<style>
           body { font-family: Arial; margin: 20px; }
-          h1 { color: #2c3e50; }
-          table { border-collapse: collapse; width: 60%; margin-bottom: 20px; }
-          th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+          table { border-collapse: collapse; width: 90%; }
+          th, td { border: 1px solid #ddd; padding: 8px; }
           th { background-color: #2c3e50; color: white; }
-          tr:nth-child(even) { background-color: #f2f2f2; }
-          .high { color: red; font-weight: bold; }
-          .medium { color: orange; }
-          .low { color: green; }
-          pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
           </style></head><body>" >> $REPORT
 
           echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
 
-          # ---- Summary Table ----
-          echo "<h2>📊 Vulnerability Summary</h2>" >> $REPORT
+          echo "<h2>📊 Summary</h2>" >> $REPORT
           echo "<table>" >> $REPORT
-          echo "<tr><th>Scan Type</th><th>Vulnerability Count</th></tr>" >> $REPORT
-          echo "<tr><td>OWASP Dependency Check</td><td class='high'>$OWASP_COUNT</td></tr>" >> $REPORT
-          echo "<tr><td>SpotBugs</td><td class='medium'>$SPOTBUGS_COUNT</td></tr>" >> $REPORT
-          echo "<tr><td>Full Code Scan</td><td class='low'>$FULL_SCAN_COUNT</td></tr>" >> $REPORT
+          echo "<tr><th>Type</th><th>Count</th></tr>" >> $REPORT
+          echo "<tr><td>OWASP</td><td>$OWASP_COUNT</td></tr>" >> $REPORT
+          echo "<tr><td>SpotBugs</td><td>$SPOTBUGS_COUNT</td></tr>" >> $REPORT
+          echo "<tr><td>Code Scan</td><td>$FULL_SCAN_COUNT</td></tr>" >> $REPORT
           echo "</table>" >> $REPORT
 
-          # ---- Git Info ----
-          echo "<h2>👤 Git Info</h2><pre>" >> $REPORT
-          cat git-info/git-info.txt >> $REPORT || true
-          echo "</pre>" >> $REPORT
-
-          # ---- Changed Files ----
-          echo "<h2>🔀 Changed Files</h2><pre>" >> $REPORT
-          cat git-info/changed-files.txt >> $REPORT || true
-          echo "</pre>" >> $REPORT
-
-          # ---- Detailed Sections ----
-          echo "<h2>OWASP Vulnerabilities</h2><pre>" >> $REPORT
-          cat owasp-report/owasp-report.json >> $REPORT || true
-          echo "</pre>" >> $REPORT
-
-          echo "<h2>SpotBugs Findings</h2><pre>" >> $REPORT
-          cat spotbugs-report/spotbugs-report.xml >> $REPORT || true
-          echo "</pre>" >> $REPORT
-
-          echo "<h2>Full Code Scan</h2><pre>" >> $REPORT
-          cat full-code-scan/full-code-scan.txt >> $REPORT || true
-          echo "</pre>" >> $REPORT
+          # OWASP table
+          echo "<h2>OWASP Issues</h2><table><tr><th>Dependency</th><th>CVE</th><th>Severity</th></tr>" >> $REPORT
+          jq -r '.dependencies[] | select(.vulnerabilities) | .fileName as $d | .vulnerabilities[] | "<tr><td>\($d)</td><td>\(.name)</td><td>\(.severity)</td></tr>"' owasp-report/owasp-report.json >> $REPORT 2>/dev/null || true
+          echo "</table>" >> $REPORT
 
           echo "</body></html>" >> $REPORT
 
-      # Step 3: Print clickable link in logs
-      - name: Print Report Path
-        run: |
-          echo "✅ HTML Report generated at:"
-          echo "final-report/security-report.html"
-          echo "⬇️ Download it from the Artifacts section: security-html-dashboard"
-
-      # Step 4: Upload artifact (visible in UI)
-      - name: Upload HTML Report
-        uses: actions/upload-artifact@v4
+      # Step 4: Upload Pages Artifact
+      - name: Upload GitHub Pages Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: security-html-dashboard
-          path: final-report/security-report.html
+          path: public
+
+      # Step 5: Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      # Step 6: Print Live URL
+      - name: Show Live Report URL
+        run: |
+          echo "✅ Live Security Report:"
+          echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
 
