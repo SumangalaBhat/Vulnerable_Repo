@@ -275,7 +275,7 @@ jobs:
         uses: actions/configure-pages@v5
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          enablement: true
+          
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
