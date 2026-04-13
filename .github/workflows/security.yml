@@ -270,10 +270,11 @@ jobs:
           mkdir -p public
           echo "<html><body><h1>Security Report</h1></body></html>" > public/security-report.html
 
-      # ✅ REQUIRED FOR PAGES
+      # REQUIRED FOR PAGES
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
+          token: ${{ secrets.PAT_TOKEN }}
           enablement: true
 
       - name: Upload Pages Artifact
