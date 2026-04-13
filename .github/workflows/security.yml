@@ -322,9 +322,89 @@ jobs:
 
           echo "</body></html>" >> $REPORT
 
-      # 🔸 Upload HTML Report
-      - name: Upload HTML Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-html-report
-          path: public/security-report.html
+      - name: Generate Security Dashboard HTML
+      run: |
+        mkdir -p public
+        REPORT=public/security-report.html
+    
+        # 🔸 Read counts safely
+        OWASP_COUNT=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' dependency-report/owasp-report.json 2>/dev/null || echo 0)
+        SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs/spotbugs-report.xml 2>/dev/null || echo 0)
+        CODE_COUNT=$(wc -l code-scan/code-scan.txt 2>/dev/null | awk '{print $1}' || echo 0)
+    
+        # 🔸 Read Git Info
+        GIT_INFO=$(cat git-info/git-info.txt 2>/dev/null || echo "No Git Info")
+    
+        # 🔸 Changed files (extract only files section if present)
+        CHANGED_FILES=$(grep -A 100 "Changed Files:" git-info/git-info.txt 2>/dev/null | tail -n +2 || echo "No changes")
+    
+        # 🔸 OWASP details
+        OWASP_DETAILS=$(cat dependency-report/owasp-report.json 2>/dev/null || echo "{}")
+    
+        # 🔸 SpotBugs
+        SPOTBUGS_DETAILS=$(cat spotbugs/spotbugs-report.xml 2>/dev/null || echo "<empty/>")
+    
+        # 🔸 Code Scan
+        CODE_SCAN_DETAILS=$(cat code-scan/code-scan.txt 2>/dev/null || echo "No issues")
+    
+        # 🔸 Generate HTML
+        cat <<EOF > $REPORT
+    <html>
+    <head>
+    <title>Security Dashboard</title>
+    
+    <style>
+    body { font-family: Arial; margin: 20px; }
+    h1 { color: #2c3e50; }
+    table { border-collapse: collapse; width: 60%; margin-bottom: 20px; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+    th { background-color: #2c3e50; color: white; }
+    tr:nth-child(even) { background-color: #f2f2f2; }
+    .high { color: red; font-weight: bold; }
+    .medium { color: orange; }
+    .low { color: green; }
+    pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+    </style>
+    
+    </head>
+    
+    <body>
+    
+    <h1>🚨 Security Dashboard</h1>
+    
+    <h2>📊 Vulnerability Summary</h2>
+    <table>
+    <tr><th>Scan Type</th><th>Vulnerability Count</th></tr>
+    <tr><td>OWASP Dependency Check</td><td class='high'>$OWASP_COUNT</td></tr>
+    <tr><td>SpotBugs</td><td class='medium'>$SPOTBUGS_COUNT</td></tr>
+    <tr><td>Full Code Scan</td><td class='low'>$CODE_COUNT</td></tr>
+    </table>
+    
+    <h2>👤 Git Info</h2>
+    <pre>
+    $GIT_INFO
+    </pre>
+    
+    <h2>🔀 Changed Files</h2>
+    <pre>
+    $CHANGED_FILES
+    </pre>
+    
+    <h2>OWASP Vulnerabilities</h2>
+    <pre>
+    $OWASP_DETAILS
+    </pre>
+    
+    <h2>SpotBugs Findings</h2>
+    <pre>
+    $SPOTBUGS_DETAILS
+    </pre>
+    
+    <h2>Full Code Scan</h2>
+    <pre>
+    $CODE_SCAN_DETAILS
+    </pre>
+    
+    </body>
+    </html>
+    EOF
