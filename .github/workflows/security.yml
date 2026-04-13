@@ -55,10 +55,6 @@ jobs:
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
           
-      - name: Verify Download
-        run: |
-          ls -lh dc.zip
-          file dc.zip
 
       - name: Run OWASP Dependency Check
         
