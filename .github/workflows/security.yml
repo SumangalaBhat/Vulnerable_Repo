@@ -43,11 +43,12 @@ jobs:
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          echo "Running OWASP Dependency Check..."
-          mvn org.owasp:dependency-check-maven:check \
-              -DfailBuildOnCVSS=0 \
-              -DskipAssembly=true \
-              -DdataDirectory=dependency-check-data || true
+          dependency-check.sh \
+            --project "test" \
+            --scan . \
+            --format JSON \
+            --out target/dependency-check-report \
+            --nvdApiKey ${{ secrets.NVD_API_KEY }}
 
       - name: Print Dependency Check Report
         run: |
