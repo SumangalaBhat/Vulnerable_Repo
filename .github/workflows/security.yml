@@ -46,39 +46,36 @@ jobs:
 
   
       # 🔸 Run OWASP Scan (STRICT)
-      - name: Run OWASP Dependency Check (Stable)
+      - name: OWASP Dependency Check (STRICT NVD MODE)
         run: |
           mkdir -p reports
       
-          echo "🔍 Checking NVD API Key..."
+          echo "🔐 Validating NVD API key..."
       
           if [ -z "$NVD_API_KEY" ]; then
-            echo "⚠️ No NVD API key → using cached DB"
-            NVD_OPTION=""
-          else
-            echo "✅ NVD API key detected"
-            NVD_OPTION="-Dnvd.api.key=$NVD_API_KEY"
+            echo "❌ NVD_API_KEY is missing"
+            exit 1
           fi
       
-          # Run scan with safe config
+          echo "✅ Starting OWASP scan with NVD..."
+      
           mvn org.owasp:dependency-check-maven:check \
-            $NVD_OPTION \
+            -Dnvd.api.key=$NVD_API_KEY \
             -Dformat=JSON \
             -DscanSet=ALL \
             -Dnvd.api.delay=8000 \
-            -Dnvd.max.retry.count=15 \
-            -Dnvd.validForHours=24 \
-            -DfailOnError=false \
-            -DfailBuildOnCVSS=0 \
-            || true
+            -Dnvd.max.retry.count=20 \
+            -Dnvd.validForHours=0 \
+            -DfailOnError=true \
+            -DfailBuildOnCVSS=0
       
-          # Always create report
-          if [ -f target/dependency-check-report.json ]; then
-            cp target/dependency-check-report.json reports/owasp-report.json
-          else
-            echo "⚠️ Creating fallback report"
-            echo '{"dependencies":[]}' > reports/owasp-report.json
+          # Ensure report exists
+          if [ ! -f target/dependency-check-report.json ]; then
+            echo "❌ Scan failed: No report generated"
+            exit 1
           fi
+      
+          cp target/dependency-check-report.json reports/owasp-report.json
       # 🔸 Install jq
       - name: Install jq
         run: sudo apt-get install -y jq
