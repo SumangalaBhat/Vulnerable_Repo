@@ -184,6 +184,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: final-report
 
+
     steps:
       # Step 1: Checkout (needed for Pages)
       - name: Checkout Code
@@ -245,5 +246,45 @@ jobs:
       - name: Show Live Report URL
         run: |
           echo "✅ Live Security Report:"
+          echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
+
+  html-live-report:
+    runs-on: ubuntu-latest
+    needs: final-report
+
+    # ✅ REQUIRED PERMISSIONS (FIX)
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate HTML Dashboard
+        run: |
+          mkdir -p public
+          echo "<html><body><h1>Security Report</h1></body></html>" > public/security-report.html
+
+      # ✅ REQUIRED FOR PAGES
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Show Live URL
+        run: |
+          echo "Live URL:"
           echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
 
