@@ -39,6 +39,12 @@ jobs:
           distribution: temurin
           java-version: 11
 
+      - name: Install OWASP Dependency Check
+        run: |
+          curl -L -o dc.zip https://github.com/jeremylong/DependencyCheck/releases/latest/download/dependency-check.zip
+          unzip dc.zip
+          mv dependency-check /opt/dependency-check
+
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
