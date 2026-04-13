@@ -1,4 +1,4 @@
-name: Full Security & Audit Pipeline
+name: Full Security & Audit Pipeline (Real-Time HTML)
 
 on:
   workflow_dispatch:
@@ -15,169 +15,55 @@ env:
 
 jobs:
 
-  # 🔹 Stage 1: Checkout & Build
+# 🔹 Stage 1: Build
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 11
-
-      - name: Build Project
-        run: mvn clean install -DskipTests
+      - run: mvn clean install -DskipTests
 
 
-  # 🔹 Stage 2: Security Scan (OWASP + NVD)
+# 🔹 Stage 2: Dependency Scan (REAL-TIME NVD)
   dependency-scan:
     runs-on: ubuntu-latest
+    needs: build
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OWASP Dependency Check (Full Repo with NVD Validation)
+      - name: Validate NVD API Key
         run: |
-          mkdir -p reports
-      
-          # 🔸 Validate NVD API Key
           if [ -z "$NVD_API_KEY" ]; then
-            echo "❌ ERROR: NVD_API_KEY is not set!"
+            echo "❌ NVD_API_KEY missing"
             exit 1
           fi
-      
-          echo "✅ NVD API Key detected. Starting vulnerability scan..."
-      
-          # 🔸 Run OWASP Dependency Check with NVD
+
+      - name: Run OWASP Dependency Check (NVD Live)
+        run: |
+          mkdir -p reports
+
           mvn org.owasp:dependency-check-maven:check \
             -Dnvd.api.key=$NVD_API_KEY \
             -Dformat=JSON \
             -DscanSet=ALL \
-            -DfailOnError=false \
             -Dnvd.api.delay=1000 \
-            -Dnvd.max.retry.count=3
-      
-          # 🔸 Verify report generated
-          if [ -f target/dependency-check-report.json ]; then
-            echo "✅ Vulnerability report generated successfully"
-            cp target/dependency-check-report.json reports/owasp-report.json
-          else
-            echo "⚠️ Report not generated, creating empty fallback"
-            echo "{}" > reports/owasp-report.json
-          fi
+            -Dnvd.max.retry.count=3 \
+            -DfailOnError=false
 
           cp target/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
 
-      - name: Upload Raw Report
+      - name: Upload OWASP Report
         uses: actions/upload-artifact@v4
         with:
-          name: raw-owasp
+          name: owasp-report
           path: reports/
 
 
-  # 🔹 Stage 2: Install jq (Tooling Stage)
-  jq-install:
-    runs-on: ubuntu-latest
-    needs: dependency-scan
-
-    steps:
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-
-  # 🔹 Stage 3: Extract Vulnerability Metrics
-  vulnerability-metrics:
-    runs-on: ubuntu-latest
-    needs: [dependency-scan, jq-install]
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: raw-owasp
-
-      - name: Extract Vulnerability Counts
-        run: |
-          mkdir -p reports
-          cp -r * reports/ 2>/dev/null || true
-
-          SUMMARY=reports/vulnerability-summary.txt
-
-          TOTAL=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-          CRITICAL=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-          HIGH=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="HIGH")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-          MEDIUM=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="MEDIUM")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-          LOW=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="LOW")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-
-          echo "==== Vulnerability Summary ====" > $SUMMARY
-          echo "Total     : $TOTAL" >> $SUMMARY
-          echo "Critical  : $CRITICAL" >> $SUMMARY
-          echo "High      : $HIGH" >> $SUMMARY
-          echo "Medium    : $MEDIUM" >> $SUMMARY
-          echo "Low       : $LOW" >> $SUMMARY
-
-          echo "TOTAL_VULN=$TOTAL" >> $GITHUB_ENV
-          echo "CRITICAL_VULN=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH_VULN=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM_VULN=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW_VULN=$LOW" >> $GITHUB_ENV
-
-      - name: Upload Summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: vuln-summary
-          path: reports/
-
-
-  # 🔹 Stage 4: Extract Vulnerability Details
-  vulnerability-details:
-    runs-on: ubuntu-latest
-    needs: [dependency-scan, jq-install]
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: raw-owasp
-
-      - name: Extract Detailed Vulnerabilities
-        run: |
-          mkdir -p reports
-          cp -r * reports/ 2>/dev/null || true
-
-          jq -r '
-            .dependencies[]?.vulnerabilities[]? |
-            [.name, .severity, .description] | @tsv
-          ' reports/owasp-report.json > reports/vulnerability-details.tsv || true
-
-      - name: Upload Details
-        uses: actions/upload-artifact@v4
-        with:
-          name: vuln-details
-          path: reports/
-
-
-  # 🔹 Stage 5: Final Upload (Combined Reports)
-  upload-report-stage:
-    runs-on: ubuntu-latest
-    needs: [vulnerability-metrics, vulnerability-details]
-
-    steps:
-      - uses: actions/download-artifact@v4
-
-      - name: Combine Reports
-        run: |
-          mkdir -p final-report
-
-          cp -r vuln-summary/* final-report/ 2>/dev/null || true
-          cp -r vuln-details/* final-report/ 2>/dev/null || true
-
-      - name: Upload Final OWASP Report
-        uses: actions/upload-artifact@v4
-
-  # 🔹 Stage 3: Static Code Scan (Full Repo Scan)
+# 🔹 Stage 3: Code Scan
   code-scan:
     runs-on: ubuntu-latest
     needs: build
@@ -185,226 +71,147 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Full Repo Scan (Secrets / Risk Patterns)
+      - name: Scan Repo for Secrets
         run: |
           mkdir -p reports
-
           grep -RniE "password|secret|apikey|token" . > reports/code-scan.txt || true
 
-      - name: Upload Code Scan Report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: code-scan
           path: reports/
 
 
-  # 🔹 Stage 4: Git Author & File Changes
+# 🔹 Stage 4: Git Info (Latest Change Only)
   git-info:
-   runs-on: ubuntu-latest
-   needs: build
-   steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 2   # enough for latest commit diff
-  
-      - name: Extract Latest Commit Details
+          fetch-depth: 2
+
+      - name: Extract Latest Commit
         run: |
           mkdir -p reports
-          OUTPUT=reports/git-info.txt
-  
-          echo "==== Latest Commit Details ====" > $OUTPUT
-          echo "" >> $OUTPUT
-  
-          # Get latest commit info
+          FILE=reports/git-info.txt
+
           COMMIT_ID=$(git log -1 --pretty=format:"%H")
-          AUTHOR_NAME=$(git log -1 --pretty=format:"%an")
-          AUTHOR_EMAIL=$(git log -1 --pretty=format:"%ae")
-          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
-  
-          echo "Commit ID : $COMMIT_ID" >> $OUTPUT
-          echo "Author    : $AUTHOR_NAME" >> $OUTPUT
-          echo "Email     : $AUTHOR_EMAIL" >> $OUTPUT
-          echo "Message   : $COMMIT_MSG" >> $OUTPUT
-  
-          # Extract PR number (if exists in commit message)
-          PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oE "#[0-9]+" | tr -d '#' || true)
-  
-          if [ -n "$PR_NUMBER" ]; then
-            echo "PR Number : $PR_NUMBER" >> $OUTPUT
-          else
-            echo "PR Number : N/A" >> $OUTPUT
-          fi
-  
-          echo "" >> $OUTPUT
-          echo "Changed Files:" >> $OUTPUT
-  
-          # Get only files changed in latest commit
-          git diff-tree --no-commit-id --name-only -r $COMMIT_ID >> $OUTPUT
-  
-      - name: Upload Git Info
-        uses: actions/upload-artifact@v4
+          AUTHOR=$(git log -1 --pretty=format:"%an")
+          EMAIL=$(git log -1 --pretty=format:"%ae")
+          MESSAGE=$(git log -1 --pretty=format:"%s")
+
+          echo "Commit ID : $COMMIT_ID" > $FILE
+          echo "Author    : $AUTHOR" >> $FILE
+          echo "Email     : $EMAIL" >> $FILE
+          echo "Message   : $MESSAGE" >> $FILE
+
+          PR=$(echo "$MESSAGE" | grep -oE "#[0-9]+" | tr -d '#')
+          echo "PR Number : ${PR:-N/A}" >> $FILE
+
+          echo "" >> $FILE
+          echo "Changed Files:" >> $FILE
+          git diff-tree --no-commit-id --name-only -r $COMMIT_ID >> $FILE
+
+      - uses: actions/upload-artifact@v4
         with:
           name: git-info
           path: reports/
 
 
-  # 🔹 Stage 5: Aggregate + Generate HTML Report
+# 🔹 Stage 5: HTML REPORT (REAL-TIME DASHBOARD)
   html-report:
     runs-on: ubuntu-latest
     needs: [dependency-scan, code-scan, git-info]
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
 
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      # 🔸 Extract OWASP Vulnerabilities
-      - name: Process OWASP Report
+      - name: Generate Real-Time HTML Report
         run: |
-          mkdir -p processed
+          mkdir -p public
+          REPORT=public/security-report.html
 
+          # 🔸 Extract live vulnerability data
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
             [.name, .severity, .description] | @tsv
-          ' owasp-report/owasp-report.json > processed/vulnerabilities.tsv || true
+          ' owasp-report/owasp-report.json > vulns.tsv || true
 
-          OWASP_COUNT=$(cat processed/vulnerabilities.tsv | wc -l || echo 0)
-          echo "OWASP_COUNT=$OWASP_COUNT" >> $GITHUB_ENV
+          TOTAL=$(wc -l < vulns.tsv || echo 0)
 
-      # 🔸 Count Code Scan Issues
-      - name: Process Code Scan
-        run: |
+          CRITICAL=$(grep -c "CRITICAL" vulns.tsv || echo 0)
+          HIGH=$(grep -c "HIGH" vulns.tsv || echo 0)
+          MEDIUM=$(grep -c "MEDIUM" vulns.tsv || echo 0)
+          LOW=$(grep -c "LOW" vulns.tsv || echo 0)
+
           CODE_COUNT=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
-          echo "CODE_COUNT=$CODE_COUNT" >> $GITHUB_ENV
 
-      # 🔸 Generate HTML Report
-      - name: Generate HTML Report
-        run: |
-          mkdir -p public
-          REPORT=public/security-report.html
-
-          echo "<html><head><title>Security Report</title></head><body>" > $REPORT
-          echo "<h1>🔐 Full Security Report</h1>" >> $REPORT
-
-          # Summary Table
-          echo "<h2>Summary</h2>" >> $REPORT
-          echo "<table border='1'>" >> $REPORT
-          echo "<tr><th>Category</th><th>Count</th></tr>" >> $REPORT
-          echo "<tr><td>OWASP Vulnerabilities</td><td>${{ env.OWASP_COUNT }}</td></tr>" >> $REPORT
-          echo "<tr><td>Code Scan Issues</td><td>${{ env.CODE_COUNT }}</td></tr>" >> $REPORT
-          echo "</table>" >> $REPORT
-
-          # Detailed Vulnerabilities
-          echo "<h2>Vulnerability Details</h2>" >> $REPORT
-          echo "<table border='1'>" >> $REPORT
-          echo "<tr><th>CVE</th><th>Severity</th><th>Description</th></tr>" >> $REPORT
-
-          while IFS=$'\t' read -r cve sev desc; do
-            echo "<tr><td>$cve</td><td>$sev</td><td>$desc</td></tr>" >> $REPORT
-          done < processed/vulnerabilities.tsv
-
-          echo "</table>" >> $REPORT
-
-          # Code Scan Details
-          echo "<h2>Code Scan Findings</h2><pre>" >> $REPORT
-          cat code-scan/code-scan.txt >> $REPORT
-          echo "</pre>" >> $REPORT
-
-          # Git Info
-          echo "<h2>Recent Changes (Authors & Files)</h2><pre>" >> $REPORT
-          cat git-info/git-info.txt >> $REPORT
-          echo "</pre>" >> $REPORT
-
-          echo "</body></html>" >> $REPORT
-
-      - name: Generate Security Dashboard HTML
-        run: |
-          mkdir -p public
-          REPORT=public/security-report.html
-      
-          # 🔸 Read counts safely
-          OWASP_COUNT=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' dependency-report/owasp-report.json 2>/dev/null || echo 0)
-          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs/spotbugs-report.xml 2>/dev/null || echo 0)
-          CODE_COUNT=$(wc -l code-scan/code-scan.txt 2>/dev/null | awk '{print $1}' || echo 0)
-      
-          # 🔸 Read Git Info
-          GIT_INFO=$(cat git-info/git-info.txt 2>/dev/null || echo "No Git Info")
-      
-          # 🔸 Changed files (extract only files section if present)
-          CHANGED_FILES=$(grep -A 100 "Changed Files:" git-info/git-info.txt 2>/dev/null | tail -n +2 || echo "No changes")
-      
-          # 🔸 OWASP details
-          OWASP_DETAILS=$(cat dependency-report/owasp-report.json 2>/dev/null || echo "{}")
-      
-          # 🔸 SpotBugs
-          SPOTBUGS_DETAILS=$(cat spotbugs/spotbugs-report.xml 2>/dev/null || echo "<empty/>")
-      
-          # 🔸 Code Scan
-          CODE_SCAN_DETAILS=$(cat code-scan/code-scan.txt 2>/dev/null || echo "No issues")
-      
-          # 🔸 Generate HTML
+          # 🔸 Build HTML
           cat <<EOF > $REPORT
           <html>
           <head>
           <title>Security Dashboard</title>
-          
           <style>
-          body { font-family: Arial; margin: 20px; }
-          h1 { color: #2c3e50; }
-          table { border-collapse: collapse; width: 60%; margin-bottom: 20px; }
-          th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
-          th { background-color: #2c3e50; color: white; }
-          tr:nth-child(even) { background-color: #f2f2f2; }
-          .high { color: red; font-weight: bold; }
-          .medium { color: orange; }
-          .low { color: green; }
-          pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+          body { font-family: Arial; margin:20px; }
+          table { border-collapse: collapse; width: 70%; }
+          th, td { border:1px solid #ddd; padding:8px; }
+          th { background:#2c3e50; color:white; }
+          .high { color:red; font-weight:bold; }
+          .medium { color:orange; }
+          .low { color:green; }
           </style>
-          
           </head>
-          
           <body>
           
-          <h1>🚨 Security Dashboard</h1>
+          <h1>🚨 Real-Time Security Dashboard</h1>
           
-          <h2>📊 Vulnerability Summary</h2>
+          <h2>📊 Summary</h2>
           <table>
-          <tr><th>Scan Type</th><th>Vulnerability Count</th></tr>
-          <tr><td>OWASP Dependency Check</td><td class='high'>$OWASP_COUNT</td></tr>
-          <tr><td>SpotBugs</td><td class='medium'>$SPOTBUGS_COUNT</td></tr>
-          <tr><td>Full Code Scan</td><td class='low'>$CODE_COUNT</td></tr>
+          <tr><th>Type</th><th>Count</th></tr>
+          <tr><td>Total Vulnerabilities</td><td class="high">$TOTAL</td></tr>
+          <tr><td>Critical</td><td class="high">$CRITICAL</td></tr>
+          <tr><td>High</td><td class="high">$HIGH</td></tr>
+          <tr><td>Medium</td><td class="medium">$MEDIUM</td></tr>
+          <tr><td>Low</td><td class="low">$LOW</td></tr>
+          <tr><td>Code Issues</td><td>$CODE_COUNT</td></tr>
           </table>
           
-          <h2>👤 Git Info</h2>
+          <h2>📌 Vulnerability Details</h2>
+          <table>
+          <tr><th>CVE</th><th>Severity</th><th>Description</th></tr>
+          EOF
+          
+                    while IFS=$'\t' read -r cve sev desc; do
+                      echo "<tr><td>$cve</td><td>$sev</td><td>$desc</td></tr>" >> $REPORT
+                    done < vulns.tsv
+          
+                    cat <<EOF >> $REPORT
+          </table>
+          
+          <h2>🧑‍💻 Latest Code Changes</h2>
           <pre>
-          $GIT_INFO
+          $(cat git-info/git-info.txt)
           </pre>
           
-          <h2>🔀 Changed Files</h2>
+          <h2>🔍 Code Scan Findings</h2>
           <pre>
-          $CHANGED_FILES
-          </pre>
-          
-          <h2>OWASP Vulnerabilities</h2>
-          <pre>
-          $OWASP_DETAILS
-          </pre>
-          
-          <h2>SpotBugs Findings</h2>
-          <pre>
-          $SPOTBUGS_DETAILS
-          </pre>
-          
-          <h2>Full Code Scan</h2>
-          <pre>
-          $CODE_SCAN_DETAILS
+          $(cat code-scan/code-scan.txt)
           </pre>
           
           </body>
           </html>
           EOF
+
+      - name: Upload HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-html-report
+          path: public/
+
+      - name: Deploy to Pages
+        uses: actions/deploy-pages@v4
