@@ -3,6 +3,11 @@ name: Java Security Pipeline
 on:
   push:
   pull_request:
+  
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
 
@@ -253,41 +258,65 @@ jobs:
     needs: final-report
 
     # ✅ REQUIRED PERMISSIONS (FIX)
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
 
+      # Step 3: Generate HTML Dashboard
       - name: Generate HTML Dashboard
         run: |
           mkdir -p public
-          echo "<html><body><h1>Security Report</h1></body></html>" > public/security-report.html
+          REPORT=public/security-report.html
 
-      # REQUIRED FOR PAGES
+          # ---- Extract counts ----
+          OWASP_COUNT=$(jq '[.dependencies[].vulnerabilities | length] | add' owasp-report/owasp-report.json 2>/dev/null || echo 0)
+          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs-report/spotbugs-report.xml 2>/dev/null || echo 0)
+          FULL_SCAN_COUNT=$(grep -c ":" full-code-scan/full-code-scan.txt 2>/dev/null || echo 0)
+
+          # ---- HTML ----
+          echo "<html><head><title>Security Dashboard</title>" > $REPORT
+          echo "<style>
+          body { font-family: Arial; margin: 20px; }
+          table { border-collapse: collapse; width: 90%; }
+          th, td { border: 1px solid #ddd; padding: 8px; }
+          th { background-color: #2c3e50; color: white; }
+          </style></head><body>" >> $REPORT
+
+          echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
+
+          echo "<h2>📊 Summary</h2>" >> $REPORT
+          echo "<table>" >> $REPORT
+          echo "<tr><th>Type</th><th>Count</th></tr>" >> $REPORT
+          echo "<tr><td>OWASP</td><td>$OWASP_COUNT</td></tr>" >> $REPORT
+          echo "<tr><td>SpotBugs</td><td>$SPOTBUGS_COUNT</td></tr>" >> $REPORT
+          echo "<tr><td>Code Scan</td><td>$FULL_SCAN_COUNT</td></tr>" >> $REPORT
+          echo "</table>" >> $REPORT
+
+          echo "<h2>OWASP Issues</h2><table><tr><th>Dependency</th><th>CVE</th><th>Severity</th></tr>" >> $REPORT
+          jq -r '.dependencies[] | select(.vulnerabilities) | .fileName as $d | .vulnerabilities[] | "<tr><td>\($d)</td><td>\(.name)</td><td>\(.severity)</td></tr>"' owasp-report/owasp-report.json >> $REPORT 2>/dev/null || true
+          echo "</table>" >> $REPORT
+
+          echo "</body></html>" >> $REPORT
+
+      # ✅ REQUIRED: Configure Pages (NO enablement, NO PAT)
       - name: Setup Pages
         uses: actions/configure-pages@v5
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          
 
+      # Step 4: Upload Pages Artifact
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
+      # Step 5: Deploy
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Show Live URL
+      # Step 6: Output URL
+      - name: Show Live Report URL
         run: |
-          echo "Live URL:"
+          echo "✅ Live Security Report:"
           echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
 
