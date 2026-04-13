@@ -170,78 +170,78 @@ jobs:
           LOW=$(grep -c "LOW" vulns.tsv || echo 0)
           CODE=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
 
-          cat <<EOF > $REPORT
-          <html>
-          <head>
-          <title>DevSecOps Dashboard</title>
-          <style>
-          body { font-family: Arial; margin: 20px; }
-          h1 { color: #2c3e50; }
-          table { border-collapse: collapse; width: 85%; }
-          th, td { border: 1px solid #ddd; padding: 10px; }
-          th { background-color: #2c3e50; color: white; }
-          tr:nth-child(even) { background-color: #f2f2f2; }
-          .critical { color: red; font-weight: bold; }
-          .high { color: darkorange; font-weight: bold; }
-          .medium { color: orange; }
-          .low { color: green; }
-          a { color: blue; }
-          </style>
-          </head>
-          <body>
-          
-          <h1>🚨 DevSecOps Security Dashboard</h1>
-          
-          <h2>📊 Summary</h2>
-          <table>
-          <tr><th>Type</th><th>Count</th></tr>
-          <tr><td>Total</td><td>$TOTAL</td></tr>
-          <tr><td>Critical</td><td class="critical">$CRITICAL</td></tr>
-          <tr><td>High</td><td class="high">$HIGH</td></tr>
-          <tr><td>Medium</td><td class="medium">$MEDIUM</td></tr>
-          <tr><td>Low</td><td class="low">$LOW</td></tr>
-          <tr><td>Code Issues</td><td>$CODE</td></tr>
-          </table>
-          
-          <h2>📌 Vulnerability Details</h2>
-          <table>
-          <tr>
-            <th>CVE</th>
-            <th>Severity</th>
-            <th>CVSS</th>
-            <th>Exploit</th>
-            <th>Description</th>
-          </tr>
-          EOF
-          
-                    while IFS=$'\t' read -r cve sev score link desc; do
-                      CLASS=$(echo "$sev" | tr '[:upper:]' '[:lower:]')
-          
-                      echo "<tr>
-                        <td>$cve</td>
-                        <td class=\"$CLASS\">$sev</td>
-                        <td>$score</td>
-                        <td><a href=\"$link\" target=\"_blank\">View</a></td>
-                        <td>$desc</td>
-                      </tr>" >> $REPORT
-                    done < vulns.tsv
-          
-                    cat <<EOF >> $REPORT
-          </table>
-          
-          <h2>🧑‍💻 Git Changes</h2>
-          <pre>
-          $(cat git-info/git-info.txt)
-          </pre>
-          
-          <h2>🔍 Code Scan</h2>
-          <pre>
-          $(cat code-scan/code-scan.txt)
-          </pre>
-          
-          </body>
-          </html>
-          EOF
+                      cat <<EOF > $REPORT
+            <html>
+            <head>
+            <title>DevSecOps Dashboard</title>
+            <style>
+            body { font-family: Arial; margin: 20px; }
+            h1 { color: #2c3e50; }
+            table { border-collapse: collapse; width: 85%; }
+            th, td { border: 1px solid #ddd; padding: 10px; }
+            th { background-color: #2c3e50; color: white; }
+            tr:nth-child(even) { background-color: #f2f2f2; }
+            .critical { color: red; font-weight: bold; }
+            .high { color: darkorange; font-weight: bold; }
+            .medium { color: orange; }
+            .low { color: green; }
+            a { color: blue; }
+            </style>
+            </head>
+            <body>
+            
+            <h1>🚨 DevSecOps Security Dashboard</h1>
+            
+            <h2>📊 Summary</h2>
+            <table>
+            <tr><th>Type</th><th>Count</th></tr>
+            <tr><td>Total</td><td>$TOTAL</td></tr>
+            <tr><td>Critical</td><td class="critical">$CRITICAL</td></tr>
+            <tr><td>High</td><td class="high">$HIGH</td></tr>
+            <tr><td>Medium</td><td class="medium">$MEDIUM</td></tr>
+            <tr><td>Low</td><td class="low">$LOW</td></tr>
+            <tr><td>Code Issues</td><td>$CODE</td></tr>
+            </table>
+            
+            <h2>📌 Vulnerability Details</h2>
+            <table>
+            <tr>
+              <th>CVE</th>
+              <th>Severity</th>
+              <th>CVSS</th>
+              <th>Exploit</th>
+              <th>Description</th>
+            </tr>
+            EOF
+            
+                      while IFS=$'\t' read -r cve sev score link desc; do
+                        CLASS=$(echo "$sev" | tr '[:upper:]' '[:lower:]')
+            
+                        echo "<tr>
+                          <td>$cve</td>
+                          <td class=\"$CLASS\">$sev</td>
+                          <td>$score</td>
+                          <td><a href=\"$link\" target=\"_blank\">View</a></td>
+                          <td>$desc</td>
+                        </tr>" >> $REPORT
+                      done < vulns.tsv
+            
+                      cat <<EOF >> $REPORT
+            </table>
+            
+            <h2>🧑‍💻 Git Changes</h2>
+            <pre>
+            $(cat git-info/git-info.txt)
+            </pre>
+            
+            <h2>🔍 Code Scan</h2>
+            <pre>
+            $(cat code-scan/code-scan.txt)
+            </pre>
+            
+            </body>
+            </html>
+            EOF
 
       - uses: actions/upload-artifact@v4
         with:
