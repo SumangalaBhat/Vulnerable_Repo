@@ -78,12 +78,12 @@ jobs:
             echo "⚠️ NVD failed → generating fallback report"
       
             cat <<EOF > reports/owasp-report.json
-      {
-        "dependencies": [],
-        "error": "NVD API failed (403/404 or rate limit). No vulnerabilities fetched."
-      }
-      EOF
-          fi
+            {
+              "dependencies": [],
+              "error": "NVD API failed (403/404 or rate limit). No vulnerabilities fetched."
+            }
+            EOF
+                fi
       # 🔸 Install jq
       - name: Install jq
         run: sudo apt-get install -y jq
