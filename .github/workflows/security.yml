@@ -66,14 +66,14 @@ jobs:
             echo "⚠️ Report NOT generated → creating fallback"
       
             cat <<EOF > reports/owasp-report.json
-      {
-        "dependencies": [],
-        "scanInfo": {
-          "error": "OWASP scan failed - no data"
-        }
-      }
-      EOF
-          fi
+              {
+                "dependencies": [],
+                "scanInfo": {
+                  "error": "OWASP scan failed - no data"
+                }
+              }
+              EOF
+                  fi
 
 
 # 🔹 Code Scan
