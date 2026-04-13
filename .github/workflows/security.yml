@@ -40,15 +40,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OWASP Dependency Check (Full Repo)
+      - name: Run OWASP Dependency Check (Full Repo with NVD Validation)
         run: |
           mkdir -p reports
-
+      
+          # 🔸 Validate NVD API Key
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "❌ ERROR: NVD_API_KEY is not set!"
+            exit 1
+          fi
+      
+          echo "✅ NVD API Key detected. Starting vulnerability scan..."
+      
+          # 🔸 Run OWASP Dependency Check with NVD
           mvn org.owasp:dependency-check-maven:check \
             -Dnvd.api.key=$NVD_API_KEY \
             -Dformat=JSON \
             -DscanSet=ALL \
-            -DfailOnError=false
+            -DfailOnError=false \
+            -Dnvd.api.delay=1000 \
+            -Dnvd.max.retry.count=3
+      
+          # 🔸 Verify report generated
+          if [ -f target/dependency-check-report.json ]; then
+            echo "✅ Vulnerability report generated successfully"
+            cp target/dependency-check-report.json reports/owasp-report.json
+          else
+            echo "⚠️ Report not generated, creating empty fallback"
+            echo "{}" > reports/owasp-report.json
+          fi
 
           cp target/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
 
@@ -60,9 +80,9 @@ jobs:
 
 
   # 🔹 Stage 2: Install jq (Tooling Stage)
-  jq-install-stage:
+  jq-install:
     runs-on: ubuntu-latest
-    needs: dependency-scan-stage
+    needs: dependency-scan
 
     steps:
       - name: Install jq
@@ -70,9 +90,9 @@ jobs:
 
 
   # 🔹 Stage 3: Extract Vulnerability Metrics
-  vulnerability-metrics-stage:
+  vulnerability-metrics:
     runs-on: ubuntu-latest
-    needs: [dependency-scan-stage, jq-install-stage]
+    needs: [dependency-scan, jq-install]
 
     steps:
       - uses: actions/download-artifact@v4
@@ -115,7 +135,7 @@ jobs:
   # 🔹 Stage 4: Extract Vulnerability Details
   vulnerability-details-stage:
     runs-on: ubuntu-latest
-    needs: [dependency-scan-stage, jq-install-stage]
+    needs: [dependency-scan, jq-install-stage]
 
     steps:
       - uses: actions/download-artifact@v4
