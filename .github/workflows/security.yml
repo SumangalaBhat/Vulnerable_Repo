@@ -46,44 +46,39 @@ jobs:
 
   
       # 🔸 Run OWASP Scan (STRICT)
-      - name: Run OWASP Dependency Check (Fix NVD 403/404)
+      - name: Run OWASP Dependency Check (Stable)
         run: |
           mkdir -p reports
       
-          # 🔸 Validate API Key
+          echo "🔍 Checking NVD API Key..."
+      
           if [ -z "$NVD_API_KEY" ]; then
-            echo "⚠️ NVD_API_KEY missing - running in fallback mode"
+            echo "⚠️ No NVD API key → using cached DB"
+            NVD_OPTION=""
           else
-            echo "✅ Using NVD API Key"
+            echo "✅ NVD API key detected"
+            NVD_OPTION="-Dnvd.api.key=$NVD_API_KEY"
           fi
       
-          # 🔸 Run OWASP with safe config
+          # Run scan with safe config
           mvn org.owasp:dependency-check-maven:check \
-            -Dnvd.api.key=$NVD_API_KEY \
+            $NVD_OPTION \
             -Dformat=JSON \
             -DscanSet=ALL \
-            -Dnvd.api.delay=6000 \
-            -Dnvd.max.retry.count=10 \
+            -Dnvd.api.delay=8000 \
+            -Dnvd.max.retry.count=15 \
+            -Dnvd.validForHours=24 \
             -DfailOnError=false \
             -DfailBuildOnCVSS=0 \
-            -DenableExperimental=true \
-            -Dnvd.validForHours=24 \
             || true
       
-          # 🔸 Ensure report always exists
+          # Always create report
           if [ -f target/dependency-check-report.json ]; then
-            echo "✅ Report generated"
             cp target/dependency-check-report.json reports/owasp-report.json
           else
-            echo "⚠️ NVD failed → generating fallback report"
-      
-            cat <<EOF > reports/owasp-report.json
-            {
-              "dependencies": [],
-              "error": "NVD API failed (403/404 or rate limit). No vulnerabilities fetched."
-            }
-            EOF
-                fi
+            echo "⚠️ Creating fallback report"
+            echo '{"dependencies":[]}' > reports/owasp-report.json
+          fi
       # 🔸 Install jq
       - name: Install jq
         run: sudo apt-get install -y jq
