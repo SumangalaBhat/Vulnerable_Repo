@@ -133,9 +133,9 @@ jobs:
 
 
   # 🔹 Stage 4: Extract Vulnerability Details
-  vulnerability-details-stage:
+  vulnerability-details:
     runs-on: ubuntu-latest
-    needs: [dependency-scan, jq-install-stage]
+    needs: [dependency-scan, jq-install]
 
     steps:
       - uses: actions/download-artifact@v4
@@ -162,7 +162,7 @@ jobs:
   # 🔹 Stage 5: Final Upload (Combined Reports)
   upload-report-stage:
     runs-on: ubuntu-latest
-    needs: [vulnerability-metrics-stage, vulnerability-details-stage]
+    needs: [vulnerability-metrics, vulnerability-details]
 
     steps:
       - uses: actions/download-artifact@v4
