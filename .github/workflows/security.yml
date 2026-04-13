@@ -55,7 +55,7 @@ jobs:
             -DscanSet=ALL \
             -DautoUpdate=false \
             -DfailOnError=false \
-            || true   # 🔥 NEVER break pipeline here
+            || true
       
           echo "📦 Checking if report exists..."
       
@@ -65,15 +65,8 @@ jobs:
           else
             echo "⚠️ Report NOT generated → creating fallback"
       
-            cat <<EOF > reports/owasp-report.json
-              {
-                "dependencies": [],
-                "scanInfo": {
-                  "error": "OWASP scan failed - no data"
-                }
-              }
-              EOF
-                  fi
+            echo '{"dependencies":[],"scanInfo":{"error":"OWASP scan failed"}}' > reports/owasp-report.json
+          fi
 
 
 # 🔹 Code Scan
