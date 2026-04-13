@@ -1,4 +1,4 @@
-name: Java Security Pipeline (Child Pipeline)
+name: Full Security & Audit Pipeline
 
 on:
   workflow_dispatch:
@@ -15,11 +15,12 @@ env:
 
 jobs:
 
-  # 🔹 Stage 1: Build
+  # 🔹 Stage 1: Checkout & Build
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -31,25 +32,16 @@ jobs:
       - name: Build Project
         run: mvn clean install -DskipTests
 
-  # 🔹 Stage 2: Security Scans
-  security-scans:
+
+  # 🔹 Stage 2: Security Scan (OWASP + NVD)
+  dependency-scan:
     runs-on: ubuntu-latest
     needs: build
-    strategy:
-      matrix:
-        scan: [owasp, spotbugs]
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-
-      # 🔸 OWASP Dependency Check with NVD API
-      - name: Run OWASP Dependency Check
-        if: matrix.scan == 'owasp'
+      - name: Run OWASP Dependency Check with NVD
         run: |
           mvn org.owasp:dependency-check-maven:check \
             -Dnvd.api.key=$NVD_API_KEY \
@@ -58,79 +50,90 @@ jobs:
           mkdir -p reports
           cp target/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
 
-      # 🔸 SpotBugs Scan
-      - name: Run SpotBugs
-        if: matrix.scan == 'spotbugs'
-        run: |
-          mvn clean install -DskipTests
-          mvn com.github.spotbugs:spotbugs-maven-plugin:spotbugs || true
-
-          mkdir -p reports
-          cp target/spotbugsXml.xml reports/spotbugs-report.xml || echo "<empty/>" > reports/spotbugs-report.xml
-
-      # 🔸 Upload Scan Reports
-      - name: Upload Reports
+      - name: Upload OWASP Report
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.scan }}
+          name: owasp-report
           path: reports/
 
-  # 🔹 Stage 3: Git Metadata Collection
-  git-metadata:
+
+  # 🔹 Stage 3: Static Code Scan (Full Repo Scan)
+  code-scan:
     runs-on: ubuntu-latest
     needs: build
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Collect Recent Commit Details
+      - name: Run Full Repo Scan (Secrets / Risk Patterns)
         run: |
           mkdir -p reports
 
-          echo "Author | Email | Files Changed" > reports/git-log.txt
-          echo "----------------------------------------" >> reports/git-log.txt
+          grep -RniE "password|secret|apikey|token" . > reports/code-scan.txt || true
 
-          git log -5 --pretty=format:"%an | %ae" --name-only >> reports/git-log.txt
-
-      - name: Upload Git Metadata
+      - name: Upload Code Scan Report
         uses: actions/upload-artifact@v4
         with:
-          name: git-metadata
+          name: code-scan
           path: reports/
 
-  # 🔹 Stage 4: HTML Report Aggregation
-  html-report:
+
+  # 🔹 Stage 4: Git Author & File Changes
+  git-info:
     runs-on: ubuntu-latest
-    needs: [security-scans, git-metadata]
+    needs: build
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download All Reports
+      - name: Extract Recent Commit Details
+        run: |
+          mkdir -p reports
+
+          echo "Author | Email | Files Changed" > reports/git-info.txt
+          echo "--------------------------------------------------" >> reports/git-info.txt
+
+          git log -5 --pretty=format:"%an | %ae" --name-only >> reports/git-info.txt
+
+      - name: Upload Git Info
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-info
+          path: reports/
+
+
+  # 🔹 Stage 5: Aggregate + Generate HTML Report
+  html-report:
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, code-scan, git-info]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
 
-      # 🔸 Install jq for JSON parsing
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      # 🔸 Process OWASP Data
-      - name: Extract Vulnerabilities
+      # 🔸 Extract OWASP Vulnerabilities
+      - name: Process OWASP Report
         run: |
           mkdir -p processed
 
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
             [.name, .severity, .description] | @tsv
-          ' owasp/owasp-report.json > processed/vuln-details.tsv || true
+          ' owasp-report/owasp-report.json > processed/vulnerabilities.tsv || true
 
-          OWASP_COUNT=$(cat processed/vuln-details.tsv | wc -l || echo 0)
+          OWASP_COUNT=$(cat processed/vulnerabilities.tsv | wc -l || echo 0)
           echo "OWASP_COUNT=$OWASP_COUNT" >> $GITHUB_ENV
 
-      # 🔸 Process SpotBugs
-      - name: Extract SpotBugs Issues
+      # 🔸 Count Code Scan Issues
+      - name: Process Code Scan
         run: |
-          SPOTBUGS_COUNT=$(grep -c "<BugInstance" spotbugs/spotbugs-report.xml || echo 0)
-          echo "SPOTBUGS_COUNT=$SPOTBUGS_COUNT" >> $GITHUB_ENV
+          CODE_COUNT=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
+          echo "CODE_COUNT=$CODE_COUNT" >> $GITHUB_ENV
 
       # 🔸 Generate HTML Report
       - name: Generate HTML Report
@@ -138,36 +141,41 @@ jobs:
           mkdir -p public
           REPORT=public/security-report.html
 
-          echo "<html><head><title>Security Dashboard</title></head><body>" > $REPORT
-          echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
+          echo "<html><head><title>Security Report</title></head><body>" > $REPORT
+          echo "<h1>🔐 Full Security Report</h1>" >> $REPORT
 
           # Summary Table
           echo "<h2>Summary</h2>" >> $REPORT
           echo "<table border='1'>" >> $REPORT
-          echo "<tr><th>Scan Type</th><th>Count</th></tr>" >> $REPORT
+          echo "<tr><th>Category</th><th>Count</th></tr>" >> $REPORT
           echo "<tr><td>OWASP Vulnerabilities</td><td>${{ env.OWASP_COUNT }}</td></tr>" >> $REPORT
-          echo "<tr><td>SpotBugs Issues</td><td>${{ env.SPOTBUGS_COUNT }}</td></tr>" >> $REPORT
+          echo "<tr><td>Code Scan Issues</td><td>${{ env.CODE_COUNT }}</td></tr>" >> $REPORT
           echo "</table>" >> $REPORT
 
-          # Vulnerability Details
+          # Detailed Vulnerabilities
           echo "<h2>Vulnerability Details</h2>" >> $REPORT
           echo "<table border='1'>" >> $REPORT
           echo "<tr><th>CVE</th><th>Severity</th><th>Description</th></tr>" >> $REPORT
 
           while IFS=$'\t' read -r cve sev desc; do
             echo "<tr><td>$cve</td><td>$sev</td><td>$desc</td></tr>" >> $REPORT
-          done < processed/vuln-details.tsv
+          done < processed/vulnerabilities.tsv
 
           echo "</table>" >> $REPORT
 
-          # Git Metadata
-          echo "<h2>Recent Code Changes</h2><pre>" >> $REPORT
-          cat git-metadata/git-log.txt >> $REPORT
+          # Code Scan Details
+          echo "<h2>Code Scan Findings</h2><pre>" >> $REPORT
+          cat code-scan/code-scan.txt >> $REPORT
+          echo "</pre>" >> $REPORT
+
+          # Git Info
+          echo "<h2>Recent Changes (Authors & Files)</h2><pre>" >> $REPORT
+          cat git-info/git-info.txt >> $REPORT
           echo "</pre>" >> $REPORT
 
           echo "</body></html>" >> $REPORT
 
-      # 🔸 Upload HTML Artifact
+      # 🔸 Upload HTML Report
       - name: Upload HTML Report
         uses: actions/upload-artifact@v4
         with:
@@ -183,11 +191,11 @@ jobs:
         with:
           path: public
 
-      - name: Deploy
+      - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Show URL
+      - name: Output Report URL
         run: |
-          echo "🌐 Report URL:"
+          echo "🌐 Security Report URL:"
           echo "${{ steps.deployment.outputs.page_url }}/security-report.html"
