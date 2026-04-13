@@ -41,11 +41,17 @@ jobs:
 
       - name: Install OWASP Dependency Check
         run: |
-          curl -L -o dc.zip https://github.com/jeremylong/DependencyCheck/releases/latest/download/dependency-check.zip
+          curl -L -o dc.zip https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
           unzip dc.zip
           mv dependency-check /opt/dependency-check
 
+      - name: Verify Download
+        run: |
+          ls -lh dc.zip
+          file dc.zip
+
       - name: Run OWASP Dependency Check
+        
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
