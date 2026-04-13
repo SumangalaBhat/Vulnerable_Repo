@@ -34,7 +34,7 @@ jobs:
 
 
   # 🔹 Stage 2: Security Scan (OWASP + NVD)
-  dependency-scan-stage:
+  dependency-scan:
     runs-on: ubuntu-latest
 
     steps:
