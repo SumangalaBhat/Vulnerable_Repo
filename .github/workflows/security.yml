@@ -34,85 +34,128 @@ jobs:
 
 
   # 🔹 Stage 2: Security Scan (OWASP + NVD)
-  dependency-scan:
+  dependency-scan-stage:
     runs-on: ubuntu-latest
-    needs: build
-  
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-  
-      - name: Setup Java (Required for OWASP)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-  
-      # 🔸 Step 1: Validate NVD API Key
-      - name: Validate NVD API Key
-        run: |
-          if [ -z "$NVD_API_KEY" ]; then
-            echo "❌ NVD_API_KEY is missing!"
-            exit 1
-          fi
-          echo "✅ NVD API Key is available"
-  
-      # 🔸 Step 2: Run Full Dependency Scan (Entire Repo)
+      - uses: actions/checkout@v4
+
       - name: Run OWASP Dependency Check (Full Repo)
         run: |
           mkdir -p reports
-  
+
           mvn org.owasp:dependency-check-maven:check \
             -Dnvd.api.key=$NVD_API_KEY \
             -Dformat=JSON \
             -DscanSet=ALL \
             -DfailOnError=false
-  
+
           cp target/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
-  
-      # 🔸 Step 3: Install jq
+
+      - name: Upload Raw Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-owasp
+          path: reports/
+
+
+  # 🔹 Stage 2: Install jq (Tooling Stage)
+  jq-install-stage:
+    runs-on: ubuntu-latest
+    needs: dependency-scan-stage
+
+    steps:
       - name: Install jq
-        run: sudo apt-get install -y jq
-  
-      # 🔸 Step 4: Extract Vulnerability Metrics
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+
+  # 🔹 Stage 3: Extract Vulnerability Metrics
+  vulnerability-metrics-stage:
+    runs-on: ubuntu-latest
+    needs: [dependency-scan-stage, jq-install-stage]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-owasp
+
       - name: Extract Vulnerability Counts
         run: |
+          mkdir -p reports
+          cp -r * reports/ 2>/dev/null || true
+
           SUMMARY=reports/vulnerability-summary.txt
-  
+
           TOTAL=$(jq '[.dependencies[]?.vulnerabilities[]?] | length' reports/owasp-report.json 2>/dev/null || echo 0)
           CRITICAL=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
           HIGH=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="HIGH")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
           MEDIUM=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="MEDIUM")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
           LOW=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="LOW")] | length' reports/owasp-report.json 2>/dev/null || echo 0)
-  
+
           echo "==== Vulnerability Summary ====" > $SUMMARY
           echo "Total     : $TOTAL" >> $SUMMARY
           echo "Critical  : $CRITICAL" >> $SUMMARY
           echo "High      : $HIGH" >> $SUMMARY
           echo "Medium    : $MEDIUM" >> $SUMMARY
           echo "Low       : $LOW" >> $SUMMARY
-  
-          # Export for next stages (HTML report)
+
           echo "TOTAL_VULN=$TOTAL" >> $GITHUB_ENV
           echo "CRITICAL_VULN=$CRITICAL" >> $GITHUB_ENV
           echo "HIGH_VULN=$HIGH" >> $GITHUB_ENV
           echo "MEDIUM_VULN=$MEDIUM" >> $GITHUB_ENV
           echo "LOW_VULN=$LOW" >> $GITHUB_ENV
-  
-      # 🔸 Step 5: Extract Detailed Vulnerabilities
-      - name: Extract Vulnerability Details
+
+      - name: Upload Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vuln-summary
+          path: reports/
+
+
+  # 🔹 Stage 4: Extract Vulnerability Details
+  vulnerability-details-stage:
+    runs-on: ubuntu-latest
+    needs: [dependency-scan-stage, jq-install-stage]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-owasp
+
+      - name: Extract Detailed Vulnerabilities
         run: |
+          mkdir -p reports
+          cp -r * reports/ 2>/dev/null || true
+
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
             [.name, .severity, .description] | @tsv
           ' reports/owasp-report.json > reports/vulnerability-details.tsv || true
-  
-      # 🔸 Step 6: Upload Reports
-      - name: Upload OWASP Reports
+
+      - name: Upload Details
         uses: actions/upload-artifact@v4
         with:
-          name: owasp-report
+          name: vuln-details
           path: reports/
+
+
+  # 🔹 Stage 5: Final Upload (Combined Reports)
+  upload-report-stage:
+    runs-on: ubuntu-latest
+    needs: [vulnerability-metrics-stage, vulnerability-details-stage]
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Combine Reports
+        run: |
+          mkdir -p final-report
+
+          cp -r vuln-summary/* final-report/ 2>/dev/null || true
+          cp -r vuln-details/* final-report/ 2>/dev/null || true
+
+      - name: Upload Final OWASP Report
+        uses: actions/upload-artifact@v4
 
   # 🔹 Stage 3: Static Code Scan (Full Repo Scan)
   code-scan:
