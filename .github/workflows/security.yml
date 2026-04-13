@@ -80,53 +80,48 @@ jobs:
 
   # 🔹 Stage 4: Git Author & File Changes
   git-info:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
+   runs-on: ubuntu-latest
+   needs: build
+   steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 10   # needed for commit history
-
-      - name: Extract Commit, PR, Author & Changed Files
+          fetch-depth: 2   # enough for latest commit diff
+  
+      - name: Extract Latest Commit Details
         run: |
           mkdir -p reports
           OUTPUT=reports/git-info.txt
-
-          echo "==== Recent Commit & PR Details ====" > $OUTPUT
+  
+          echo "==== Latest Commit Details ====" > $OUTPUT
           echo "" >> $OUTPUT
-
-          # Loop through last 5 commits
-          for commit in $(git log -5 --pretty=format:"%H"); do
-            
-            echo "----------------------------------------" >> $OUTPUT
-            
-            # Commit Info
-            COMMIT_ID=$(git show -s --format="%H" $commit)
-            AUTHOR_NAME=$(git show -s --format="%an" $commit)
-            AUTHOR_EMAIL=$(git show -s --format="%ae" $commit)
-            COMMIT_MSG=$(git show -s --format="%s" $commit)
-
-            echo "Commit ID   : $COMMIT_ID" >> $OUTPUT
-            echo "Author      : $AUTHOR_NAME ($AUTHOR_EMAIL)" >> $OUTPUT
-            echo "Message     : $COMMIT_MSG" >> $OUTPUT
-
-            # Extract PR number from commit message (if exists)
-            PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oE "#[0-9]+" | tr -d '#' || echo "N/A")
-
-            if [ "$PR_NUMBER" != "" ]; then
-              echo "PR Number   : $PR_NUMBER" >> $OUTPUT
-            else
-              echo "PR Number   : N/A" >> $OUTPUT
-            fi
-
-            # Files changed in this commit
-            echo "Changed Files:" >> $OUTPUT
-            git show --name-only --pretty="" $commit | sed '/^$/d' >> $OUTPUT
-
-            echo "" >> $OUTPUT
-          done
-
+  
+          # Get latest commit info
+          COMMIT_ID=$(git log -1 --pretty=format:"%H")
+          AUTHOR_NAME=$(git log -1 --pretty=format:"%an")
+          AUTHOR_EMAIL=$(git log -1 --pretty=format:"%ae")
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+  
+          echo "Commit ID : $COMMIT_ID" >> $OUTPUT
+          echo "Author    : $AUTHOR_NAME" >> $OUTPUT
+          echo "Email     : $AUTHOR_EMAIL" >> $OUTPUT
+          echo "Message   : $COMMIT_MSG" >> $OUTPUT
+  
+          # Extract PR number (if exists in commit message)
+          PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oE "#[0-9]+" | tr -d '#' || true)
+  
+          if [ -n "$PR_NUMBER" ]; then
+            echo "PR Number : $PR_NUMBER" >> $OUTPUT
+          else
+            echo "PR Number : N/A" >> $OUTPUT
+          fi
+  
+          echo "" >> $OUTPUT
+          echo "Changed Files:" >> $OUTPUT
+  
+          # Get only files changed in latest commit
+          git diff-tree --no-commit-id --name-only -r $COMMIT_ID >> $OUTPUT
+  
       - name: Upload Git Info
         uses: actions/upload-artifact@v4
         with:
