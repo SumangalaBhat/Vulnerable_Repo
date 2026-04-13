@@ -6,31 +6,53 @@ on:
 
 jobs:
 
-  # 🔹 Stage 1: Checkout and Build
+  # 🔹 Stage 1: Build
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # Step 1: Checkout
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2: Setup Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 11
 
-      # Step 3: Build
       - name: Build Project
         run: mvn clean install -DskipTests
 
-  # 🔹 Stage 2: OWASP Dependency Check
+  # 🔹 Stage 2: Git Metadata (Commit + PR Info)
+  git-info:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Capture Commit Details
+        run: |
+          mkdir -p reports
+          echo "Author: $(git log -1 --pretty=format:'%an')" > reports/git-info.txt
+          echo "Email: $(git log -1 --pretty=format:'%ae')" >> reports/git-info.txt
+          echo "Message: $(git log -1 --pretty=format:'%s')" >> reports/git-info.txt
+          echo "Commit ID: $(git log -1 --pretty=format:'%H')" >> reports/git-info.txt
+
+      - name: Capture PR Changed Files
+        run: |
+          git fetch origin main || true
+          git diff --name-only origin/main...HEAD > reports/changed-files.txt || true
+
+      - name: Upload Git Metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-info
+          path: reports/
+
+  # 🔹 Stage 3: OWASP Dependency Scan
   dependency-check:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -40,17 +62,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 11
-
-      - name: Validate NVD API Key
-        run: |
-          if [ -z "$NVD_API_KEY" ]; then
-            echo "❌ NVD_API_KEY is NOT set"
-            exit 1
-          else
-            echo "✅ NVD_API_KEY is set"
-          fi
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
       - name: Run OWASP Dependency Check
         run: mvn org.owasp:dependency-check-maven:check
@@ -60,23 +71,18 @@ jobs:
       - name: Save OWASP Report
         run: |
           mkdir -p reports
-          if [ -f target/dependency-check-report/dependency-check-report.json ]; then
-            cp target/dependency-check-report/dependency-check-report.json reports/owasp-report.json
-          else
-            echo "{}" > reports/owasp-report.json
-          fi
+          cp target/dependency-check-report/dependency-check-report.json reports/owasp-report.json || echo "{}" > reports/owasp-report.json
 
-      - name: Upload OWASP Artifact
+      - name: Upload OWASP Report
         uses: actions/upload-artifact@v4
         with:
-          name: owasp-dependency-report
+          name: owasp-report
           path: reports/owasp-report.json
 
-  # 🔹 Stage 3: SpotBugs (Code Issues)
+  # 🔹 Stage 4: SpotBugs Scan
   spotbugs:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -96,57 +102,51 @@ jobs:
       - name: Save SpotBugs Report
         run: |
           mkdir -p reports
-          if [ -f target/spotbugsXml.xml ]; then
-            cp target/spotbugsXml.xml reports/spotbugs-report.xml
-          else
-            echo "<empty/>" > reports/spotbugs-report.xml
-          fi
+          cp target/spotbugsXml.xml reports/spotbugs-report.xml || echo "<empty/>" > reports/spotbugs-report.xml
 
-      - name: Upload SpotBugs Artifact
+      - name: Upload SpotBugs Report
         uses: actions/upload-artifact@v4
         with:
           name: spotbugs-report
           path: reports/spotbugs-report.xml
 
-  # 🔹 Stage 4: Custom Code Vulnerability Scan
-  custom-scan:
+  # 🔹 Stage 5: Full Repository Code Vulnerability Scan
+  full-code-scan:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Run Custom Code Scan
+      - name: Scan Entire Repository
         run: |
           mkdir -p reports
-          REPORT=reports/custom-scan-report.txt
+          REPORT=reports/full-code-scan.txt
 
-          echo "========== CUSTOM CODE SCAN ==========" > $REPORT
+          echo "========== FULL REPO CODE SCAN ==========" > $REPORT
 
           echo "\n[SQL Injection Patterns]" >> $REPORT
-          grep -R "Statement" src >> $REPORT || true
+          grep -R "Statement" . >> $REPORT || true
 
-          echo "\n[Command Injection Patterns]" >> $REPORT
-          grep -R "Runtime.getRuntime()" src >> $REPORT || true
+          echo "\n[Command Injection]" >> $REPORT
+          grep -R "Runtime.getRuntime()" . >> $REPORT || true
 
-          echo "\n[Hardcoded Credentials]" >> $REPORT
-          grep -R "password" . >> $REPORT || true
+          echo "\n[Hardcoded Secrets]" >> $REPORT
+          grep -R -i "password" . >> $REPORT || true
 
           echo "\n[Path Traversal]" >> $REPORT
-          grep -R "FileReader" src >> $REPORT || true
+          grep -R "FileReader" . >> $REPORT || true
 
-      - name: Upload Custom Scan Artifact
+      - name: Upload Full Scan Report
         uses: actions/upload-artifact@v4
         with:
-          name: custom-code-scan-report
-          path: reports/custom-scan-report.txt
+          name: full-code-scan
+          path: reports/full-code-scan.txt
 
-  # 🔹 Stage 5: Combined Vulnerability Report
+  # 🔹 Stage 6: Final Text Report
   final-report:
     runs-on: ubuntu-latest
-    needs: [dependency-check, spotbugs, custom-scan]
-
+    needs: [git-info, dependency-check, spotbugs, full-code-scan]
     steps:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -158,67 +158,66 @@ jobs:
 
           echo "========== FINAL SECURITY REPORT ==========" > $REPORT
 
-          echo "\n--- OWASP Dependency Report ---" >> $REPORT
-          cat owasp-dependency-report/owasp-report.json >> $REPORT || true
+          echo "\n--- Git Info ---" >> $REPORT
+          cat git-info/git-info.txt >> $REPORT || true
 
-          echo "\n--- SpotBugs Report ---" >> $REPORT
+          echo "\n--- Changed Files ---" >> $REPORT
+          cat git-info/changed-files.txt >> $REPORT || true
+
+          echo "\n--- OWASP ---" >> $REPORT
+          cat owasp-report/owasp-report.json >> $REPORT || true
+
+          echo "\n--- SpotBugs ---" >> $REPORT
           cat spotbugs-report/spotbugs-report.xml >> $REPORT || true
 
-          echo "\n--- Custom Code Scan ---" >> $REPORT
-          cat custom-code-scan-report/custom-scan-report.txt >> $REPORT || true
+          echo "\n--- Full Code Scan ---" >> $REPORT
+          cat full-code-scan/full-code-scan.txt >> $REPORT || true
 
-      - name: Upload Final Report Artifact
+      - name: Upload Final Text Report
         uses: actions/upload-artifact@v4
         with:
           name: final-security-report
           path: final-report/security-summary.txt
 
-
-  # 🔹 Stage 5: HTML Security Dashboard
-  final-report-html:
+  # 🔹 Stage 7: HTML Dashboard
+  html-report:
     runs-on: ubuntu-latest
-    needs: [dependency-check, spotbugs, custom-scan,final-report]
-
+    needs: final-report
     steps:
-      # Step 1: Download all artifacts
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
 
-      # Step 2: Generate HTML Dashboard
-      - name: Generate HTML Report
+      - name: Generate HTML Dashboard
         run: |
           mkdir -p final-report
           REPORT=final-report/security-report.html
 
-          echo "<html><head><title>Security Report</title>" > $REPORT
-          echo "<style>
-          body { font-family: Arial; margin: 20px; }
-          h1 { color: #2c3e50; }
-          h2 { color: #e74c3c; }
-          pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
-          </style></head><body>" >> $REPORT
-
+          echo "<html><body>" > $REPORT
           echo "<h1>🚨 Security Dashboard</h1>" >> $REPORT
 
-          # OWASP Section
-          echo "<h2>OWASP Dependency Vulnerabilities</h2><pre>" >> $REPORT
-          cat owasp-dependency-report/owasp-report.json >> $REPORT || echo "No OWASP data" >> $REPORT
+          echo "<h2>Git Info</h2><pre>" >> $REPORT
+          cat git-info/git-info.txt >> $REPORT
           echo "</pre>" >> $REPORT
 
-          # SpotBugs Section
-          echo "<h2>SpotBugs Findings</h2><pre>" >> $REPORT
-          cat spotbugs-report/spotbugs-report.xml >> $REPORT || echo "No SpotBugs data" >> $REPORT
+          echo "<h2>Changed Files</h2><pre>" >> $REPORT
+          cat git-info/changed-files.txt >> $REPORT
           echo "</pre>" >> $REPORT
 
-          # Custom Scan Section
-          echo "<h2>Custom Code Scan</h2><pre>" >> $REPORT
-          cat custom-code-scan-report/custom-scan-report.txt >> $REPORT || echo "No custom scan data" >> $REPORT
+          echo "<h2>OWASP Vulnerabilities</h2><pre>" >> $REPORT
+          cat owasp-report/owasp-report.json >> $REPORT
+          echo "</pre>" >> $REPORT
+
+          echo "<h2>SpotBugs</h2><pre>" >> $REPORT
+          cat spotbugs-report/spotbugs-report.xml >> $REPORT
+          echo "</pre>" >> $REPORT
+
+          echo "<h2>Full Code Scan</h2><pre>" >> $REPORT
+          cat full-code-scan/full-code-scan.txt >> $REPORT
           echo "</pre>" >> $REPORT
 
           echo "</body></html>" >> $REPORT
 
-      # Step 3: Upload HTML Dashboard
-      - name: Upload HTML Security Report
+      - name: Upload HTML Report
         uses: actions/upload-artifact@v4
         with:
           name: security-html-dashboard
