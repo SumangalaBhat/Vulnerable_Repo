@@ -404,17 +404,21 @@ jobs:
       - name: Download Report
         uses: actions/download-artifact@v4
         with:
-          path: public
-  
-      - name: Prepare index.html
+          name: security-dashboard
+          path: artifacts
+      
+      - name: Prepare index.html (FIXED)
         run: |
-          if [ -f public/security-report.html ]; then
-            mv public/security-report.html public/index.html
-          fi
-  
-          if [ ! -f public/index.html ]; then
+          REPORT_FILE=$(find artifacts -name "security-report.html" | head -1)
+      
+          mkdir -p public
+      
+          if [ ! -z "$REPORT_FILE" ]; then
+            cp "$REPORT_FILE" public/index.html
+          else
             echo "<h1>No report generated</h1>" > public/index.html
           fi
+    
   
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -427,6 +431,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
   
       # ✅ FIXED URL LOGIC
       - name: Print Dashboard URL
