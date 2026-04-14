@@ -99,6 +99,15 @@
                 </configuration>
             </plugin>
 
+                    <plugins>
+                      <plugin>
+                        <groupId>org.openrewrite.maven</groupId>
+                        <artifactId>rewrite-maven-plugin</artifactId>
+                        <version>5.36.0</version>
+                      </plugin>
+                    </plugins>
+                  
+
         </plugins>
     </build>
 
