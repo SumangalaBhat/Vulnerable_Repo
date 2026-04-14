@@ -192,6 +192,54 @@ jobs:
           echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
           echo "LOW=$LOW" >> $GITHUB_ENV
 
+      - name: Extract Vulnerabilities with Dependency
+        run: |
+          mkdir -p processed
+      
+          jq -r '
+            .dependencies[]? as $dep |
+            $dep.vulnerabilities[]? |
+            [
+              .name,
+              ($dep.fileName // "unknown"),
+              ($dep.version // "unknown"),
+              (.severity // "UNKNOWN"),
+              (.cvssv3.baseScore // .cvssv2.score // 0)
+            ] | @tsv
+          ' owasp/owasp.json > processed/vuln_dep.tsv || true
+
+      - name: Normalize Dependency Names
+        run: |
+          awk -F'\t' '{
+            gsub(".jar","",$2)
+            split($2,a,"-")
+            dep=a[1]
+            print $1"\t"dep"\t"$3"\t"$4"\t"$5
+          }' processed/vuln_dep.tsv > processed/normalized.tsv
+
+      - name: Map Vulnerabilities to Repo Files
+        run: |
+          mkdir -p processed
+      
+          > processed/final.tsv
+      
+          while IFS=$'\t' read -r cve dep ver sev score; do
+      
+            # 🔍 Find matching files
+            FILES=$(grep -ril "$dep" src/ pom.xml 2>/dev/null | tr '\n' ',')
+      
+            # If no file found → mark as NOT USED
+            if [ -z "$FILES" ]; then
+              FILES="NOT_FOUND_IN_CODE"
+            fi
+      
+            echo -e "$cve\t$dep\t$ver\t$sev\t$score\t$FILES" >> processed/final.tsv
+      
+          done < processed/normalized.tsv
+      
+          echo "==== MAPPED DATA ===="
+          cat processed/final.tsv
+
       - name: Normalize + Merge Vulnerabilities
         run: |
           mkdir -p processed
@@ -275,10 +323,9 @@ jobs:
       - name: Extract Top Critical
         run: |
            awk -F'\t' '($2=="CRITICAL") || ($3+0 >=9)' processed/sorted.tsv | head -5 > processed/top-critical.tsv
-
-      - name: Clean Env File
+      - name: Clean + Sort
         run: |
-          sed -i '/CVE-/d' $GITHUB_ENV || true
+          sort -t$'\t' -k5 -nr processed/final.tsv | uniq > processed/sorted_final.tsv
 
       - name: Debug Output
         run: |
@@ -432,6 +479,37 @@ jobs:
             done < processed/codeql.tsv
             
             echo "</table>" >> $REPORT
+
+            <h2>📍 Vulnerabilities Mapped to Repository Files</h2>
+            <table>
+            <tr>
+            <th>CVE</th><th>Dependency</th><th>Version</th>
+            <th>Severity</th><th>CVSS</th><th>Used In Files</th>
+            </tr>
+            EOF
+            
+            while IFS=$'\t' read -r cve dep ver sev score files; do
+            
+              [[ -z "$cve" || "$cve" != CVE-* ]] && continue
+            
+              CLASS="low"
+              if [[ "$sev" == "CRITICAL" || $(echo "$score >= 9" | bc) -eq 1 ]]; then CLASS="critical"; fi
+              if [[ "$sev" == "HIGH" ]]; then CLASS="high"; fi
+              if [[ "$sev" == "MEDIUM" ]]; then CLASS="medium"; fi
+            
+              echo "<tr class='$CLASS'>
+                    <td>$cve</td>
+                    <td>$dep</td>
+                    <td>$ver</td>
+                    <td>$sev</td>
+                    <td>$score</td>
+                    <td>$files</td>
+                    </tr>" >> $REPORT
+            
+            done < processed/sorted_final.tsv
+            
+            cat <<EOF >> $REPORT
+            </table>
           
           <h2>Git Changes</h2>
           <pre>$(cat git/git.txt)</pre>
