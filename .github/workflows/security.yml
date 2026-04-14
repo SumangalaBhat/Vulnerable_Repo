@@ -181,6 +181,11 @@ jobs:
           MEDIUM=$(awk -F'\t' '($2=="MEDIUM") || ($3+0 >=4 && $3+0<7){c++} END{print c+0}' processed/all.tsv)
           LOW=$(awk -F'\t' '($2=="LOW") || ($3+0 >0 && $3+0<4){c++} END{print c+0}' processed/all.tsv)
       
+      - name: Safe Export Variables
+        run: |
+          # Remove any accidental invalid env lines
+          sed -i '/CVE-/d' $GITHUB_ENV || true
+      
           echo "TOTAL=$TOTAL" >> $GITHUB_ENV
           echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
           echo "HIGH=$HIGH" >> $GITHUB_ENV
