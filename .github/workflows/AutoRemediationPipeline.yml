@@ -203,6 +203,10 @@ jobs:
       # =========================
       # 🚀 CREATE PR + AUTO REVIEWERS
       # =========================
+      - name: Push branch
+        run: |
+          git push origin auto-fix/security-fixes --force
+      
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
@@ -210,15 +214,13 @@ jobs:
           branch: auto-fix/security-fixes
           base: main
           delete-branch: true
-          commit-message: "🔐 Auto Security Fixes"
-  
           title: "🔐 Auto Security Fixes"
           body: |
             Automated fixes applied:
             - Removed hardcoded secrets
             - Externalized credentials
             - Flagged unsafe patterns
-  
+        
             🚨 Merge blocked if HIGH/CRITICAL vulnerabilities exist
   
             ⚠️ Manual fixes required:
