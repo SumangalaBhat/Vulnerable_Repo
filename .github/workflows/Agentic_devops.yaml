@@ -88,9 +88,9 @@ jobs:
         run: |
           mvn -q org.openrewrite.maven:rewrite-maven-plugin:run \
             -Drewrite.activeRecipes=\
-org.openrewrite.java.security.NoHardcodedPasswords,\
-org.openrewrite.java.security.UsePreparedStatements \
-            || true
+            org.openrewrite.java.security.NoHardcodedPasswords,\
+            org.openrewrite.java.security.UsePreparedStatements \
+                        || true
 
       # 🤖 Agent 3: Custom Fix
       - name: Custom Fixes
