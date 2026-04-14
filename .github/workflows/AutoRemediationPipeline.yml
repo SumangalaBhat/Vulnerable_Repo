@@ -139,9 +139,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create Fix Branch
+      - name: Create or Reset Fix Branch (SAFE)
         run: |
-          git checkout -b auto-fix/security-fixes || git checkout auto-fix/security-fixes
+          git fetch origin
+      
+          if git ls-remote --exit-code --heads origin auto-fix/security-fixes; then
+            echo "✅ Branch exists → resetting"
+            git checkout auto-fix/security-fixes
+            git reset --hard origin/auto-fix/security-fixes
+          else
+            echo "🆕 Branch does not exist → creating"
+            git checkout -b auto-fix/security-fixes origin/main
+          fi
 
       # 🔴 Fix properties secrets
       - name: Fix hardcoded secrets (properties)
