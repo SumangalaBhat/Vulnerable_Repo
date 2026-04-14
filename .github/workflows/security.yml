@@ -1,348 +1,136 @@
-name: DevSecOps Pipeline
+name: Java Microservice DevSecOps Pipeline
 
 on:
   push:
+    branches: [ main ]
   pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  security-events: write
+    branches: [ main ]
 
 jobs:
 
-# 🔹 1. BUILD
+  # =========================
+  # Stage 1: Checkout
+  # =========================
+  checkout:
+    runs-on: ubuntu-latest
+    outputs:
+      repo-path: ${{ steps.checkout.outputs.repo-path }}
+    steps:
+      - name: Checkout Code
+        id: checkout
+        uses: actions/checkout@v4
+
+  # =========================
+  # Stage 2: Setup Java
+  # =========================
+  setup-java:
+    runs-on: ubuntu-latest
+    needs: checkout
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify Java
+        run: java -version
+
+  # =========================
+  # Stage 3: Build Project
+  # =========================
   build:
     runs-on: ubuntu-latest
+    needs: setup-java
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-      - run: mvn clean install -DskipTests
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-# 🔹 2. OWASP SCAN
-  owasp:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: |
-          mkdir -p reports
-          mvn org.owasp:dependency-check-maven:check \
-            -Dformat=JSON \
-            -DfailOnError=false || true
-
-          cp target/dependency-check-report.json reports/owasp.json || echo '{"dependencies":[]}' > reports/owasp.json
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: owasp
-          path: reports/
-
-# 🔹 3. TRIVY
-  trivy:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: |
-          sudo apt-get update && sudo apt-get install -y curl
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
-          mkdir -p reports
-          ./bin/trivy fs --format json -o reports/trivy.json . || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: trivy
-          path: reports/
-
-# 🔹 4. CODEQL (REAL CODE VULNERABILITIES)
-  codeql:
-    runs-on: ubuntu-latest
-  
-    permissions:
-      security-events: write
-      contents: read
-      actions: read
-  
-    steps:
-      - uses: actions/checkout@v4
-  
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 11
-  
-      # 🔍 Detect project structure
-      - name: Detect Java Project
-        id: detect
-        run: |
-          echo "🔍 Searching for pom.xml..."
-          POM=$(find . -name "pom.xml" | head -1)
-  
-          if [ -z "$POM" ]; then
-            echo "❌ No Maven project found → skipping build"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            DIR=$(dirname "$POM")
-            echo "Found project at: $DIR"
-            echo "project_dir=$DIR" >> $GITHUB_OUTPUT
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-  
-      # ✅ INIT CODEQL
-      - name: Initialize CodeQL
-        if: steps.detect.outputs.skip == 'false'
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-          build-mode: manual
-  
-      # ✅ BUILD PROJECT (CRITICAL FIX)
       - name: Build Project
-        if: steps.detect.outputs.skip == 'false'
         run: |
-          cd "${{ steps.detect.outputs.project_dir }}"
-  
-          echo "🚀 Running Maven build..."
-          mvn -B clean package -DskipTests
-  
-          echo "📦 Checking compiled classes..."
-          COUNT=$(find . -name "*.class" | wc -l)
-          echo "Class count: $COUNT"
-  
-          if [ "$COUNT" -eq 0 ]; then
-            echo "⚠️ No classes compiled → continuing but CodeQL may be limited"
-          else
-            echo "✅ Build successful"
-          fi
-  
-      # ✅ RUN CODEQL (never fail pipeline)
-      - name: Analyze CodeQL
-        if: steps.detect.outputs.skip == 'false'
-        uses: github/codeql-action/analyze@v3
-        continue-on-error: true
-  
-      # 📦 EXPORT SARIF
-      - name: Export Results
-        run: |
-          mkdir -p reports
-          FILE=$(find . -name "*.sarif" | head -1)
-  
-          if [ -f "$FILE" ]; then
-            cp "$FILE" reports/codeql.sarif
-            echo "✅ SARIF exported"
-          else
-            echo "⚠️ No SARIF found"
-            echo '{"runs":[]}' > reports/codeql.sarif
-          fi
+          echo "Building project..."
+          mvn clean compile
+          echo "Build completed."
 
-      - name: Convert SARIF → TSV
-        run: |
-          mkdir -p processed
-      
-          FILE=$(find . -name "*.sarif" | head -1)
-      
-          if [ -f "$FILE" ]; then
-            echo "Processing SARIF..."
-      
-            jq -r '
-              .runs[].results[]? |
-              [
-                .ruleId,
-                .level,
-                .message.text,
-                .locations[0].physicalLocation.artifactLocation.uri
-              ] | @tsv
-            ' "$FILE" > processed/codeql.tsv
-      
-          else
-            echo "No SARIF found"
-            echo "" > processed/codeql.tsv
-          fi
-  
-      - uses: actions/upload-artifact@v4
-        with:
-          name: codeql
-          path: processed/
-
-# 🔹 5. GIT + PR INFO
-  git-info:
+  # =========================
+  # Stage 4: Dependency Scan (Offline)
+  # =========================
+  dependency-scan:
     runs-on: ubuntu-latest
+    needs: build
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v3
         with:
-          fetch-depth: 2
+          distribution: temurin
+          java-version: '17'
 
-      - run: |
-          mkdir -p reports
+      - name: Run OWASP Dependency Check (Offline)
+        run: |
+          echo "Running Dependency Check..."
+          mvn org.owasp:dependency-check-maven:9.0.9:check \
+            -Ddependency-check.skipUpdate=true \
+            -Ddependency-check.autoUpdate=false \
+            -DfailOnError=false \
+            -Dformat=HTML
 
-          echo "Commit: $(git log -1 --pretty=%H)" > reports/git.txt
-          echo "Author: $(git log -1 --pretty=%an)" >> reports/git.txt
-          echo "Email: $(git log -1 --pretty=%ae)" >> reports/git.txt
-          echo "Message: $(git log -1 --pretty=%s)" >> reports/git.txt
+      - name: Debug - Dependency Report
+        run: |
+          REPORT=$(find target -name "dependency-check-report.html" | head -n1)
+          if [ -f "$REPORT" ]; then
+            echo "Dependency vulnerability report found at: $REPORT"
+            echo "Preview first 20 lines:"
+            head -n 20 "$REPORT"
+          else
+            echo "No dependency report found!"
+          fi
 
-          echo "PR: ${{ github.event.pull_request.number || 'N/A' }}" >> reports/git.txt
-
-          echo "Changed Files:" >> reports/git.txt
-          git diff-tree --no-commit-id --name-only -r HEAD >> reports/git.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: git
-          path: reports/
-
-# 🔹 6. PROCESS DATA
-  process:
+  # =========================
+  # Stage 5: Custom Code Scan
+  # =========================
+  custom-scan:
     runs-on: ubuntu-latest
-    needs: [owasp, trivy, codeql]
-
+    needs: build
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - run: sudo apt-get install -y jq bc
-
-      - name: Extract + Merge Vulnerabilities
+      - name: Scan Java files for custom vulnerabilities
         run: |
-          mkdir -p processed
+          echo "Scanning all .java files for custom vulnerabilities..."
+          FILES=$(find src/main/java -name "*.java")
+          VULNERABILITIES=0
 
-          # OWASP
-          jq -r '
-            .dependencies[]?.vulnerabilities[]? |
-            [
-              .name,
-              (.severity | ascii_upcase),
-              (.cvssv3.baseScore // 0),
-              (.references[0].url // "N/A")
-            ] | @tsv
-          ' owasp/owasp.json > processed/owasp.tsv || true
+          for FILE in $FILES; do
+            grep -nH 'password\s*=\s*".*"' "$FILE" && VULNERABILITIES=$((VULNERABILITIES+1))
+            grep -nH 'API_KEY\s*=\s*".*"' "$FILE" && VULNERABILITIES=$((VULNERABILITIES+1))
+            grep -nH 'Runtime\.getRuntime\(\)\.exec' "$FILE" && VULNERABILITIES=$((VULNERABILITIES+1))
+            grep -nH '"SELECT .*" \+' "$FILE" && VULNERABILITIES=$((VULNERABILITIES+1))
+          done
 
-          # TRIVY
-          jq -r '
-            .Results[]?.Vulnerabilities[]? |
-            [
-              .VulnerabilityID,
-              (.Severity | ascii_upcase),
-              (.CVSS.nvd.V3Score // 0),
-              (.PrimaryURL // "N/A")
-            ] | @tsv
-          ' trivy/trivy.json > processed/trivy.tsv || true
+          if [ $VULNERABILITIES -eq 0 ]; then
+            echo "✅ No custom vulnerabilities found in .java files."
+          else
+            echo "⚠️ $VULNERABILITIES potential custom vulnerabilities detected!"
+          fi
 
-          cat processed/owasp.tsv processed/trivy.tsv | grep -v '^$' > processed/all.tsv
-
-      - name: Count Vulnerabilities
-        run: |
-          TOTAL=$(grep -c . processed/all.tsv || echo 0)
-
-          CRITICAL=$(awk -F'\t' '($2=="CRITICAL") || ($3>=9){c++} END{print c+0}' processed/all.tsv)
-          HIGH=$(awk -F'\t' '($2=="HIGH") || ($3>=7 && $3<9){c++} END{print c+0}' processed/all.tsv)
-          MEDIUM=$(awk -F'\t' '($2=="MEDIUM") || ($3>=4 && $3<7){c++} END{print c+0}' processed/all.tsv)
-          LOW=$(awk -F'\t' '($2=="LOW") || ($3>0 && $3<4){c++} END{print c+0}' processed/all.tsv)
-
-          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
-          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW=$LOW" >> $GITHUB_ENV
-
-      - run: sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
-      - run: awk -F'\t' '($2=="CRITICAL")||($3>=9)' processed/sorted.tsv | head -5 > processed/top.tsv
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: processed
-          path: processed/
-
-# 🔹 7. HTML REPORT
-  report:
+  # =========================
+  # Stage 6: Upload Reports
+  # =========================
+  upload-reports:
     runs-on: ubuntu-latest
-    needs: [process, git-info]
-
+    needs: [dependency-scan, custom-scan]
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Generate HTML
-        run: |
-          mkdir -p public
-          REPORT=public/report.html
-
-          if [ -f codeql/codeql.tsv ]; then
-
-          while IFS=$'\t' read -r rule sev msg file; do
-            CLASS="low"
-            [[ "$sev" == "error" ]] && CLASS="critical"
-            [[ "$sev" == "warning" ]] && CLASS="high"
-        
-            echo "<tr class='$CLASS'><td>$rule</td><td>$sev</td><td>$msg</td><td>$file</td></tr>" >> $REPORT
-        
-          done < codeql/codeql.tsv
-        
-            else
-              echo "<tr><td colspan='4'>No CodeQL vulnerabilities found</td></tr>" >> $REPORT
-            fi
-
-          cat <<EOF > $REPORT
-          <html><head>
-          <style>
-          body { font-family: Arial; }
-          table { border-collapse: collapse; width:100%; }
-          th,td { border:1px solid black; padding:8px; }
-          .critical {background:#ff4d4d;}
-          .high {background:#ff944d;}
-          .medium {background:#ffd24d;}
-          .low {background:#d2ff4d;}
-          </style></head><body>
-
-          <h1>🚨 Security Dashboard</h1>
-
-          <h2>Summary</h2>
-          <table>
-          <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
-          <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
-          <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
-          <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
-          <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
-          </table>
-
-          <h2>🔥 Top 5 Critical</h2>
-          <table><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
-          EOF
-
-          while IFS=$'\t' read -r id sev score link; do
-            echo "<tr class='critical'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
-          done < processed/top.tsv
-
-          echo "</table><h2>📊 All Vulnerabilities</h2><table>" >> $REPORT
-
-          while IFS=$'\t' read -r id sev score link; do
-            CLASS="low"
-            [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
-            [[ "$sev" == "HIGH" ]] && CLASS="high"
-            [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
-
-            echo "<tr class='$CLASS'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
-          done < processed/sorted.tsv
-
-          echo "</table><h2>💻 Code Vulnerabilities</h2><table>" >> $REPORT
-
-          while IFS=$'\t' read -r rule sev msg file; do
-            CLASS="low"
-            [[ "$sev" == "error" ]] && CLASS="critical"
-            [[ "$sev" == "warning" ]] && CLASS="high"
-
-            echo "<tr class='$CLASS'><td>$rule</td><td>$sev</td><td>$msg</td><td>$file</td></tr>" >> $REPORT
-          done < codeql/codeql.tsv
-
-          echo "</table><h2>Git Info</h2><pre>" >> $REPORT
-          cat git/git.txt >> $REPORT
-          echo "</pre></body></html>" >> $REPORT
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload Dependency Check Report
+        uses: actions/upload-artifact@v4
         with:
-          name: dashboard
-          path: public/
+          name: vulnerability-reports
+          path: |
+            target/dependency-check-report.html
+            target/site/dependency-check-report.html
