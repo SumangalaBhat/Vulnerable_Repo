@@ -186,12 +186,90 @@ jobs:
           echo "HIGH=$HIGH" >> $GITHUB_ENV
           echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
           echo "LOW=$LOW" >> $GITHUB_ENV
-  
-      - name: Upload Processed Data
-        uses: actions/upload-artifact@v4
-        with:
-          name: processed
-          path: processed/
+
+      - name: Normalize + Merge Vulnerabilities
+        run: |
+          mkdir -p processed
+      
+          # 🔹 Normalize OWASP
+          jq -r '
+            .dependencies[]?.vulnerabilities[]? |
+            [
+              .name,
+              ((.severity // "UNKNOWN") | ascii_upcase),
+              (.cvssv3.baseScore // .cvssv2.score // 0),
+              (.references[0].url // "N/A")
+            ] | @tsv
+          ' owasp/owasp.json > processed/owasp.tsv || true
+      
+          # 🔹 Normalize Trivy
+          jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            [
+              .VulnerabilityID,
+              ((.Severity // "UNKNOWN") | ascii_upcase),
+              (
+                .CVSS.nvd.V3Score //
+                .CVSS.redhat.V3Score //
+                .CVSS.ghsa.V3Score //
+                0
+              ),
+              (.PrimaryURL // "N/A")
+            ] | @tsv
+          ' trivy/trivy.json > processed/trivy.tsv || true
+      
+          # 🔹 Merge + remove empty lines
+          cat processed/owasp.tsv processed/trivy.tsv | grep -v '^$' > processed/all.tsv
+      
+          echo "==== DEBUG DATA ===="
+          cat processed/all.tsv || true
+
+      - name: Calculate Vulnerability Counts
+        run: |
+          TOTAL=$(wc -l < processed/all.tsv || echo 0)
+      
+          CRITICAL=$(awk -F'\t' '
+            ($2=="CRITICAL") || ($3+0 >= 9)
+            {c++} END{print c+0}
+          ' processed/all.tsv)
+      
+          HIGH=$(awk -F'\t' '
+            ($2=="HIGH") || ($3+0 >=7 && $3+0<9)
+            {c++} END{print c+0}
+          ' processed/all.tsv)
+      
+          MEDIUM=$(awk -F'\t' '
+            ($2=="MEDIUM") || ($3+0 >=4 && $3+0<7)
+            {c++} END{print c+0}
+          ' processed/all.tsv)
+      
+          LOW=$(awk -F'\t' '
+            ($2=="LOW") || ($3+0 >0 && $3+0<4)
+            {c++} END{print c+0}
+          ' processed/all.tsv)
+      
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
+          echo "HIGH=$HIGH" >> $GITHUB_ENV
+          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW=$LOW" >> $GITHUB_ENV
+      
+          echo "✅ FINAL COUNTS:"
+          echo "Critical=$CRITICAL High=$HIGH Medium=$MEDIUM Low=$LOW"
+
+          - name: Sort Vulnerabilities by CVSS
+            run: |
+              sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
+
+          - name: Extract Top Critical
+            run: |
+              awk -F'\t' '($2=="CRITICAL") || ($3+0 >=9)' processed/sorted.tsv | head -5 > processed/top-critical.tsv
+    
+          - name: Upload Processed Data
+            uses: actions/upload-artifact@v4
+            with:
+              name: processed
+              path: processed/
 
 # 🔹 Stage 7: HTML Dashboard (FINAL OUTPUT)
   html-report:
@@ -200,49 +278,85 @@ jobs:
 
     steps:
       - uses: actions/download-artifact@v4
-
-      - name: Generate HTML
+    
+      - name: Generate HTML Report
         run: |
           mkdir -p public
           REPORT=public/security-report.html
       
           CODE=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
       
-          # 🔹 Split vulnerabilities by severity
-          awk -F'\t' 'tolower($2) ~ /critical/ {print}' processed/all.tsv > critical.tsv
-          awk -F'\t' 'tolower($2) ~ /high/ {print}' processed/all.tsv > high.tsv
-          awk -F'\t' 'tolower($2) ~ /medium/ {print}' processed/all.tsv > medium.tsv
-          awk -F'\t' 'tolower($2) ~ /low/ {print}' processed/all.tsv > low.tsv
-      
           cat <<EOF > $REPORT
-              <html>
-              <head>
-              <title>Security Dashboard</title>
-              <style>
-              table { border-collapse: collapse; width: 100%; margin-bottom:20px; }
-              th, td { padding: 8px; text-align: left; }
-              th { background-color: #333; color: white; }
-              .red { color: red; }
-              .orange { color: orange; }
-              .gold { color: goldenrod; }
-              .green { color: green; }
-              </style>
-              </head>
-              <body>
-              
-              <h1>🚨 DevSecOps Security Dashboard</h1>
-              
-              <h2>Summary</h2>
-              <table border="1">
-              <tr><th>Type</th><th>Count</th></tr>
-              <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
-              <tr><td class="red">Critical</td><td>${{ env.CRITICAL }}</td></tr>
-              <tr><td class="orange">High</td><td>${{ env.HIGH }}</td></tr>
-              <tr><td class="gold">Medium</td><td>${{ env.MEDIUM }}</td></tr>
-              <tr><td class="green">Low</td><td>${{ env.LOW }}</td></tr>
-              <tr><td>Code Issues</td><td>$CODE</td></tr>
-              </table>
-              EOF
+          <html>
+          <head>
+          <title>Security Dashboard</title>
+          <style>
+          body { font-family: Arial; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid black; padding: 8px; }
+          th { background: #333; color: white; }
+          .critical { background: #ff4d4d; }
+          .high { background: #ff944d; }
+          .medium { background: #ffd24d; }
+          .low { background: #d2ff4d; }
+          </style>
+          </head>
+          
+          <body>
+          
+          <h1>🚨 DevSecOps Dashboard</h1>
+          
+          <h2>Summary</h2>
+          <table>
+          <tr><th>Type</th><th>Count</th></tr>
+          <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
+          <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
+          <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
+          <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
+          <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
+          <tr><td>Code Issues</td><td>$CODE</td></tr>
+          </table>
+          
+          <h2>🔥 Top 5 Critical Vulnerabilities</h2>
+          <table>
+          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit</th></tr>
+          EOF
+          
+              while IFS=$'\t' read -r id sev score link; do
+                echo "<tr class='critical'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+              done < processed/top-critical.tsv
+          
+              cat <<EOF >> $REPORT
+          </table>
+          
+          <h2>📊 All Vulnerabilities (Sorted by CVSS)</h2>
+          <table>
+          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit</th></tr>
+          EOF
+          
+              while IFS=$'\t' read -r id sev score link; do
+          
+                CLASS="low"
+                if [[ "$sev" == "CRITICAL" || $(echo "$score >= 9" | bc) -eq 1 ]]; then CLASS="critical"; fi
+                if [[ "$sev" == "HIGH" ]]; then CLASS="high"; fi
+                if [[ "$sev" == "MEDIUM" ]]; then CLASS="medium"; fi
+          
+                echo "<tr class='$CLASS'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+          
+              done < processed/sorted.tsv
+          
+              cat <<EOF >> $REPORT
+          </table>
+          
+          <h2>Git Changes</h2>
+          <pre>$(cat git/git.txt)</pre>
+          
+          <h2>Code Issues</h2>
+          <pre>$(cat code/code.txt)</pre>
+          
+          </body>
+          </html>
+          EOF
 
       - uses: actions/upload-artifact@v4
         with:
