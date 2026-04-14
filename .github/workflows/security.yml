@@ -78,87 +78,69 @@ jobs:
           distribution: temurin
           java-version: 11
   
-      # ✅ IMPORTANT: ensure correct directory
-      - name: Verify project structure
-        run: |
-          echo "Listing files..."
-          ls -R
-          echo "Check pom.xml"
-          find . -name "pom.xml"
-  
-      # ✅ INIT
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-          build-mode: manual   # 🔥 important
-  
-      # ✅ FORCE CLEAN BUILD (no cache)
-      - name: Build with Maven (VISIBLE TO CODEQL)
-        run: |
-          mvn -B clean compile -DskipTests
-  
-      # ✅ DEBUG: ensure classes exist
-      - name: Verify compiled classes
-        run: |
-          if [ ! -d "target/classes" ]; then
-            echo "❌ No compiled classes found!"
-            exit 1
-          fi
-          echo "✅ Classes found"
-          find target/classes | head
-
+      # 🔍 Debug (optional but useful)
       - name: Debug Project Structure
         run: |
           echo "==== POM FILES ===="
           find . -name "pom.xml"
-      
+  
           echo "==== JAVA FILES ===="
           find . -name "*.java" | head -20
-      
-          echo "==== SRC STRUCTURE ===="
-          ls -R src || true
-
-      - name: Smart Build (Auto-detect)
+  
+      # ✅ INIT (MUST be before build)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          build-mode: manual
+  
+      # 🔥 SINGLE CLEAN BUILD (CRITICAL STEP)
+      - name: Build Project (Auto-detect root)
         run: |
-          echo "Finding pom.xml..."
-          POM=$(find . -name pom.xml | head -1)
-      
+          echo "🔍 Locating pom.xml..."
+          POM=$(find . -name "pom.xml" | head -1)
+  
           if [ -z "$POM" ]; then
             echo "❌ No pom.xml found"
             exit 1
           fi
-      
-          DIR=$(dirname "$POM")
-          echo "Building in $DIR"
-      
-          cd "$DIR"
-          mvn clean compile -DskipTests
-      
-          echo "Checking compiled classes..."
-          find . -name "*.class" | head
-      
+  
+          ROOT_DIR=$(dirname "$POM")
+          echo "📦 Using project directory: $ROOT_DIR"
+  
+          cd "$ROOT_DIR"
+  
+          echo "🚀 Running Maven build..."
+          mvn -B clean compile -DskipTests
+  
+      # ✅ VERIFY BUILD (robust check)
+      - name: Verify Compiled Classes
+        run: |
           COUNT=$(find . -name "*.class" | wc -l)
-          echo "Class count: $COUNT"
-      
+          echo "Compiled classes count: $COUNT"
+  
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ No classes compiled"
+            echo "❌ No compiled classes found → CodeQL will fail"
             exit 1
           fi
   
+          echo "✅ Build successful"
+  
       # ✅ ANALYZE
-      - name: Run CodeQL
+      - name: Run CodeQL Analysis
         uses: github/codeql-action/analyze@v3
   
-      # ✅ EXPORT SARIF
+      # ✅ EXPORT RESULTS
       - name: Export SARIF
         run: |
           mkdir -p reports
           FILE=$(find . -name "*.sarif" | head -1)
+  
           if [ -f "$FILE" ]; then
             cp "$FILE" reports/codeql.sarif
+            echo "✅ SARIF exported"
           else
-            echo "No SARIF found"
+            echo "⚠️ No SARIF found"
           fi
   
       - uses: actions/upload-artifact@v4
