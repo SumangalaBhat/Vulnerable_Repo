@@ -183,38 +183,30 @@ jobs:
                 CRITICAL=$(awk -F'\t' '($2=="CRITICAL"){c++} END{print c+0}' "$FILE" 2>/dev/null)
                 HIGH=$(awk -F'\t' '($2=="HIGH"){c++} END{print c+0}' "$FILE" 2>/dev/null)
                 MEDIUM=$(awk -F'\t' '($2=="MEDIUM"){c++} END{print c+0}' "$FILE" 2>/dev/null)
-                LOW=$(awk -F'\t' '($2=="LOW"){c++} END{print c+0}' "$FILE" 2>/dev/null)
-            
-
+                LOW=$(awk -F'\t' '($2=="LOW"){c++} END{print c+0}' "$FILE" 2>/dev/null)         
                 TOTAL=${TOTAL:-0}
                 CRITICAL=${CRITICAL:-0}
                 HIGH=${HIGH:-0}
                 MEDIUM=${MEDIUM:-0}
                 LOW=${LOW:-0}
-            
-
                 TOTAL=$(echo "$TOTAL" | tr -d '[:space:]')
                 CRITICAL=$(echo "$CRITICAL" | tr -d '[:space:]')
                 HIGH=$(echo "$HIGH" | tr -d '[:space:]')
                 MEDIUM=$(echo "$MEDIUM" | tr -d '[:space:]')
                 LOW=$(echo "$LOW" | tr -d '[:space:]')
-            
-            # ✅ Debug (IMPORTANT)
-            echo "DEBUG COUNTS:"
-            echo "TOTAL=$TOTAL"
-            echo "CRITICAL=$CRITICAL"
-            echo "HIGH=$HIGH"
-            echo "MEDIUM=$MEDIUM"
-            echo "LOW=$LOW"
-            
-            # ✅ Write safely to GITHUB_ENV
-            {
-              echo "TOTAL=$TOTAL"
-              echo "CRITICAL=$CRITICAL"
-              echo "HIGH=$HIGH"
-              echo "MEDIUM=$MEDIUM"
-              echo "LOW=$LOW"
-            } >> "$GITHUB_ENV"
+                echo "DEBUG COUNTS:"
+                echo "TOTAL=$TOTAL"
+                echo "CRITICAL=$CRITICAL"
+                echo "HIGH=$HIGH"
+                echo "MEDIUM=$MEDIUM"
+                echo "LOW=$LOW"
+                {
+                  echo "TOTAL=$TOTAL"
+                  echo "CRITICAL=$CRITICAL"
+                  echo "HIGH=$HIGH"
+                  echo "MEDIUM=$MEDIUM"
+                  echo "LOW=$LOW"
+                } >> "$GITHUB_ENV"
 
       - name: Sort Data
         run: |
