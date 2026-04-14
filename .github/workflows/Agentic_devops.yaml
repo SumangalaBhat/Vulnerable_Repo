@@ -9,32 +9,29 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  security-events: write
   pages: write
   id-token: write
 
 jobs:
 
-  # =========================
-  # 🔹 Stage 1: Setup
-  # =========================
+# =========================
+# 🔹 Stage 1: Setup
+# =========================
   setup:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-  # =========================
-  # 🔹 Stage 2: Git Info
-  # =========================
+# =========================
+# 🔹 Stage 2: Git Info
+# =========================
   git-info:
     runs-on: ubuntu-latest
     needs: setup
@@ -47,15 +44,10 @@ jobs:
       - name: Collect Git Info
         run: |
           mkdir -p git
-
-          echo "===== Latest Commit =====" > git/git.txt
-          git log -1 --pretty=format:"Author: %an%nEmail: %ae%nDate: %ad%nMessage: %s" >> git/git.txt
-
-          echo -e "\n\n===== Changed Files =====" >> git/git.txt
-          git diff --name-only HEAD~1 >> git/git.txt || echo "No previous commit" >> git/git.txt
-
-          echo -e "\n\n===== PR Info =====" >> git/git.txt
-          echo "PR Author: ${{ github.actor }}" >> git/git.txt
+          git log -1 --pretty=format:"Author: %an%nEmail: %ae%nDate: %ad%nMessage: %s" > git/git.txt
+          echo -e "\n\nChanged Files:" >> git/git.txt
+          git diff --name-only HEAD~1 >> git/git.txt || true
+          echo -e "\n\nPR Author: ${{ github.actor }}" >> git/git.txt
           echo "Branch: ${{ github.ref_name }}" >> git/git.txt
 
       - uses: actions/upload-artifact@v4
@@ -63,9 +55,9 @@ jobs:
           name: git-data
           path: git/
 
-  # =========================
-  # 🔹 Stage 3: Code Scan
-  # =========================
+# =========================
+# 🔹 Stage 3: Code Scan
+# =========================
   code-scan:
     runs-on: ubuntu-latest
     needs: setup
@@ -76,15 +68,14 @@ jobs:
       - name: Install Tools
         run: |
           pip install semgrep
-          sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Run Semgrep
+      - name: Run Scan
         run: |
           mkdir -p code
           semgrep scan --config auto --json > code/semgrep.json || true
 
-      - name: Convert JSON → TSV
+      - name: Convert to TSV
         run: |
           jq -r '.results[]? | [.check_id, .extra.severity, .path, (.start.line|tostring), .extra.message] | @tsv' code/semgrep.json > code/code.tsv || true
 
@@ -93,12 +84,13 @@ jobs:
           name: code-data
           path: code/
 
-  # =========================
-  # 🔹 Stage 4: Process
-  # =========================
-  process:
+# =========================
+# 🔹 Stage 4: AI Suggestions
+# =========================
+  ai-suggestions:
     runs-on: ubuntu-latest
     needs: code-scan
+    if: always()
 
     steps:
       - uses: actions/download-artifact@v4
@@ -106,101 +98,159 @@ jobs:
           name: code-data
           path: code
 
-      - name: Calculate Counts
+      - name: Generate AI Fix Suggestions
         run: |
-          FILE="code/code.tsv"
+          mkdir -p ai
 
-          TOTAL=$(grep -c . "$FILE" 2>/dev/null || echo 0)
-          HIGH=$(awk -F'\t' '$2=="ERROR"{c++} END{print c+0}' "$FILE")
-          MEDIUM=$(awk -F'\t' '$2=="WARNING"{c++} END{print c+0}' "$FILE")
+          if [ -f code/code.tsv ]; then
+            while IFS=$'\t' read -r rule sev file line msg; do
 
-          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
-          echo "HIGH=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+              FIX="Review manually"
 
-  # =========================
-  # 🔹 Stage 5: Dashboard
-  # =========================
+              if echo "$msg" | grep -qiE "secret|password|token"; then
+                FIX="Move to environment variables or GitHub Secrets"
+              elif echo "$msg" | grep -qi "sql"; then
+                FIX="Use PreparedStatement to prevent SQL injection"
+              elif echo "$msg" | grep -qi "exec"; then
+                FIX="Avoid Runtime.exec and validate inputs"
+              fi
+
+              echo -e "$rule\t$sev\t$file\t$line\t$msg\t$FIX" >> ai/ai.tsv
+
+            done < code/code.tsv
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-data
+          path: ai/
+
+# =========================
+# 🔹 Stage 5: Auto Remediation (Agents)
+# =========================
+  auto-remediation:
+    runs-on: ubuntu-latest
+    needs: code-scan
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 🤖 Agent 1: Semgrep Autofix
+      - name: Semgrep Autofix
+        run: |
+          pip install semgrep
+          semgrep scan --config auto --autofix || true
+
+      # 🤖 Agent 2: OpenRewrite
+      - name: OpenRewrite Fix
+        run: |
+          mvn -q org.openrewrite.maven:rewrite-maven-plugin:run \
+            -Drewrite.activeRecipes=org.openrewrite.java.security.NoHardcodedPasswords || true
+
+      # 🤖 Agent 3: Custom Fix
+      - name: Custom Fixes
+        run: |
+          find . -name "*.java" -type f | while read f; do
+            sed -i 's/"my-super-secret-key"/System.getenv("SECRET_KEY")/g' "$f"
+            sed -i 's/Runtime.getRuntime().exec/\/\/ BLOCKED_EXEC/g' "$f"
+          done
+
+      # Create branch safely
+      - name: Create Fix Branch
+        run: |
+          git fetch origin
+          git checkout -B auto-fix/agentic origin/${GITHUB_REF_NAME} || git checkout -b auto-fix/agentic
+
+      - name: Commit & Push
+        run: |
+          git config user.name "agentic-bot"
+          git config user.email "bot@devsecops.com"
+          git add .
+          git commit -m "🤖 Agentic security fixes" || echo "No changes"
+          git push origin auto-fix/agentic --force
+
+# =========================
+# 🔹 Stage 6: Dashboard
+# =========================
   dashboard:
     runs-on: ubuntu-latest
-    needs: [process, git-info]
+    needs: [ai-suggestions, git-info]
     if: always()
 
     steps:
       - uses: actions/download-artifact@v4
+        with:
+          name: code-data
+          path: code
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ai-data
+          path: ai
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: git-data
+          path: git
 
       - name: Generate HTML
         run: |
           mkdir -p public
           REPORT=public/security-report.html
 
-          echo "<h2>Git Info</h2><pre>" >> $REPORT
+          echo "<html><body><h1>🤖 Agentic Dashboard</h1>" > $REPORT
 
-          if [ -f git/git.txt ]; then
-            cat git/git.txt >> $REPORT
-          else
-            echo "No Git info available" >> $REPORT
-          fi
-          
-          echo "</pre></body></html>" >> $REPORT
-
-          echo "<html><body>" > $REPORT
-          echo "<h1>🤖 Agentic Dashboard</h1>" >> $REPORT
-
-          echo "<h2>Summary</h2>" >> $REPORT
-          echo "<table border='1'>" >> $REPORT
-          echo "<tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>" >> $REPORT
-          echo "<tr><td>High</td><td>${{ env.HIGH }}</td></tr>" >> $REPORT
-          echo "<tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>" >> $REPORT
-          echo "</table>" >> $REPORT
-
-          echo "<h2>Code Issues</h2>" >> $REPORT
-          echo "<table border='1'>" >> $REPORT
+          echo "<h2>Code Issues</h2><table border='1'>" >> $REPORT
           echo "<tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Message</th></tr>" >> $REPORT
+
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}"
 
           if [ -f code/code.tsv ]; then
             while IFS=$'\t' read -r r s f l m; do
-              echo "<tr><td>$r</td><td>$s</td><td>$f</td><td>$l</td><td>$m</td></tr>" >> $REPORT
+              CLEAN=$(echo "$f" | sed 's|^\./||')
+              URL="$REPO_URL/$CLEAN#L$l"
+              echo "<tr><td>$r</td><td>$s</td><td><a href='$URL'>$CLEAN</a></td><td>$l</td><td>$m</td></tr>" >> $REPORT
             done < code/code.tsv
           fi
 
           echo "</table>" >> $REPORT
 
+          echo "<h2>🤖 AI Fix Suggestions</h2><table border='1'>" >> $REPORT
+          echo "<tr><th>File</th><th>Fix</th></tr>" >> $REPORT
+
+          if [ -f ai/ai.tsv ]; then
+            while IFS=$'\t' read -r r s f l m fix; do
+              CLEAN=$(echo "$f" | sed 's|^\./||')
+              URL="$REPO_URL/$CLEAN#L$l"
+              echo "<tr><td><a href='$URL'>$CLEAN</a></td><td>$fix</td></tr>" >> $REPORT
+            done < ai/ai.tsv
+          fi
+
+          echo "</table>" >> $REPORT
+
           echo "<h2>Git Info</h2><pre>" >> $REPORT
-          cat git/git.txt >> $REPORT
+          [ -f git/git.txt ] && cat git/git.txt >> $REPORT || echo "No git info" >> $REPORT
           echo "</pre></body></html>" >> $REPORT
 
       - name: Branch Dashboard
         run: |
-          BRANCH=${GITHUB_REF_NAME}
-          mkdir -p public/$BRANCH
-          cp public/security-report.html public/$BRANCH/index.html
+          mkdir -p public/${GITHUB_REF_NAME}
+          cp public/security-report.html public/${GITHUB_REF_NAME}/index.html
 
       - name: Root Index
         run: |
-          echo "<h1>Dashboards</h1>" > public/index.html
-          echo "<a href='./${GITHUB_REF_NAME}/'>${GITHUB_REF_NAME}</a>" >> public/index.html
+          echo "<h1>Dashboards</h1><a href='./${GITHUB_REF_NAME}/'>${GITHUB_REF_NAME}</a>" > public/index.html
 
-      - name: Upload Pages
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
-      - name: Download Code Data
-        uses: actions/download-artifact@v4
-        with:
-          name: code-data
-          path: code
-      
-      - name: Download Git Data
-        uses: actions/download-artifact@v4
-        with:
-          name: git-data
-          path: git
-
-  # =========================
-  # 🔹 Stage 6: Deploy Pages
-  # =========================
+# =========================
+# 🔹 Stage 7: Deploy Pages
+# =========================
   deploy-pages:
     runs-on: ubuntu-latest
     needs: dashboard
