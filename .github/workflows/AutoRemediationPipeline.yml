@@ -203,6 +203,8 @@ jobs:
             - SQL Injection
             - Auth logic
 
+
+
 # =========================
 # 🔹 Stage 7: HTML Report (Optional)
 # =========================
