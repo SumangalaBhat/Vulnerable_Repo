@@ -110,18 +110,43 @@ jobs:
 
       - name: Count Vulnerabilities
         run: |
-          TOTAL=$(grep -c . processed/owasp.tsv || echo 0)
-
-          CRITICAL=$(awk -F'\t' '($2=="CRITICAL")||($3>=9){c++} END{print c+0}' processed/owasp.tsv)
-          HIGH=$(awk -F'\t' '($2=="HIGH")||($3>=7&&$3<9){c++} END{print c+0}' processed/owasp.tsv)
-          MEDIUM=$(awk -F'\t' '($2=="MEDIUM")||($3>=4&&$3<7){c++} END{print c+0}' processed/owasp.tsv)
-          LOW=$(awk -F'\t' '($2=="LOW")||($3>0&&$3<4){c++} END{print c+0}' processed/owasp.tsv)
-
-          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
-          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW=$LOW" >> $GITHUB_ENV
+          mkdir -p processed
+          
+          # Ensure file exists
+          if [ ! -f processed/owasp.tsv ]; then
+            echo "" > processed/owasp.tsv
+          fi
+          
+          # Safe counts
+          TOTAL=$(grep -c . processed/owasp.tsv 2>/dev/null || true)
+          
+          CRITICAL=$(awk -F'\t' '($2=="CRITICAL")||($3>=9){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
+          HIGH=$(awk -F'\t' '($2=="HIGH")||($3>=7&&$3<9){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
+          MEDIUM=$(awk -F'\t' '($2=="MEDIUM")||($3>=4&&$3<7){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
+          LOW=$(awk -F'\t' '($2=="LOW")||($3>0&&$3<4){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
+          
+          # Default to 0 if empty
+          TOTAL=${TOTAL:-0}
+          CRITICAL=${CRITICAL:-0}
+          HIGH=${HIGH:-0}
+          MEDIUM=${MEDIUM:-0}
+          LOW=${LOW:-0}
+          
+          # Debug
+          echo "TOTAL=$TOTAL"
+          echo "CRITICAL=$CRITICAL"
+          echo "HIGH=$HIGH"
+          echo "MEDIUM=$MEDIUM"
+          echo "LOW=$LOW"
+          
+          # SAFE export (very important)
+          {
+            echo "TOTAL=$TOTAL"
+            echo "CRITICAL=$CRITICAL"
+            echo "HIGH=$HIGH"
+            echo "MEDIUM=$MEDIUM"
+            echo "LOW=$LOW"
+          } >> $GITHUB_ENV
 
       - name: Sort Vulnerabilities
         run: |
