@@ -205,50 +205,43 @@ jobs:
         run: |
           mkdir -p public
           REPORT=public/security-report.html
-
+      
           CODE=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
-
+      
+          # 🔹 Split vulnerabilities by severity
+          awk -F'\t' 'tolower($2) ~ /critical/ {print}' processed/all.tsv > critical.tsv
+          awk -F'\t' 'tolower($2) ~ /high/ {print}' processed/all.tsv > high.tsv
+          awk -F'\t' 'tolower($2) ~ /medium/ {print}' processed/all.tsv > medium.tsv
+          awk -F'\t' 'tolower($2) ~ /low/ {print}' processed/all.tsv > low.tsv
+      
           cat <<EOF > $REPORT
               <html>
-              <head><title>Security Dashboard</title></head>
+              <head>
+              <title>Security Dashboard</title>
+              <style>
+              table { border-collapse: collapse; width: 100%; margin-bottom:20px; }
+              th, td { padding: 8px; text-align: left; }
+              th { background-color: #333; color: white; }
+              .red { color: red; }
+              .orange { color: orange; }
+              .gold { color: goldenrod; }
+              .green { color: green; }
+              </style>
+              </head>
               <body>
               
               <h1>🚨 DevSecOps Security Dashboard</h1>
               
+              <h2>Summary</h2>
               <table border="1">
               <tr><th>Type</th><th>Count</th></tr>
               <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
-              <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
-              <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
-              <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
-              <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
+              <tr><td class="red">Critical</td><td>${{ env.CRITICAL }}</td></tr>
+              <tr><td class="orange">High</td><td>${{ env.HIGH }}</td></tr>
+              <tr><td class="gold">Medium</td><td>${{ env.MEDIUM }}</td></tr>
+              <tr><td class="green">Low</td><td>${{ env.LOW }}</td></tr>
               <tr><td>Code Issues</td><td>$CODE</td></tr>
               </table>
-              
-              <h2>Vulnerabilities (CVSS + Exploits)</h2>
-              <table border="1">
-              <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit Link</th></tr>
-              EOF
-              
-                        while IFS=$'\t' read -r id sev score link; do
-                          echo "<tr><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
-                        done < processed/all.tsv
-              
-                        cat <<EOF >> $REPORT
-              </table>
-              
-              <h2>Git Changes</h2>
-              <pre>
-              $(cat git/git.txt)
-              </pre>
-              
-              <h2>Code Issues</h2>
-              <pre>
-              $(cat code/code.txt)
-              </pre>
-              
-              </body>
-              </html>
               EOF
 
       - uses: actions/upload-artifact@v4
