@@ -218,24 +218,31 @@ jobs:
 # =========================
 # 🔹 Stage 5: Git Info
 # =========================
+# 🔹 5. GIT + PR INFO
   git-info:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - run: |
-          mkdir -p git
-          echo "Last Commit:" > git/git.txt
-          git log -1 --pretty=format:"%h - %an - %ar - %s" >> git/git.txt
+          mkdir -p reports
 
-          echo -e "\n\nChanged Files:" >> git/git.txt
-          git diff --name-only HEAD~1 >> git/git.txt || true
+          echo "Commit: $(git log -1 --pretty=%H)" > reports/git.txt
+          echo "Author: $(git log -1 --pretty=%an)" >> reports/git.txt
+          echo "Email: $(git log -1 --pretty=%ae)" >> reports/git.txt
+          echo "Message: $(git log -1 --pretty=%s)" >> reports/git.txt
+
+          echo "PR: ${{ github.event.pull_request.number || 'N/A' }}" >> reports/git.txt
+
+          echo "Changed Files:" >> reports/git.txt
+          git diff-tree --no-commit-id --name-only -r HEAD >> reports/git.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: git
-          path: git/
+          path: reports/
 
 # =========================
 # 🔹 Stage 6: Process Data
