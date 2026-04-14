@@ -98,15 +98,25 @@ jobs:
       - name: Scan ALL repo files
         run: |
           mkdir -p reports
-
-          echo "🔍 Scanning ALL files for vulnerabilities..."
-
-          grep -RniE "password|secret|apikey|token|exec\(|SELECT .* \+" . > reports/code.txt || true
+          
+          echo "🔍 Scanning ALL files..."
+          
+          # Format: RULE | SEVERITY | FILE | LINE | CODE
+          grep -RniE "password|secret|apikey|token|exec\(|SELECT .* \+" . | while read line; do
+            FILE=$(echo "$line" | cut -d: -f1)
+            LINE=$(echo "$line" | cut -d: -f2)
+            CODE=$(echo "$line" | cut -d: -f3-)
+          
+            RULE="Sensitive Pattern"
+            SEVERITY="MEDIUM"
+          
+            echo -e "$RULE\t$SEVERITY\t$FILE\t$LINE\t$CODE"
+          done > reports/code.tsv || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: code
-          path: reports/
+          path: reports/code.tsv
 
 # =========================
 # 🔹 Stage 5: Git Info (Commit + PR + Author)
@@ -233,6 +243,35 @@ jobs:
           REPORT=public/security-report.html
 
           CODE_COUNT=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
+
+          echo "<h2>💻 Code Vulnerabilities (All Files)</h2>" >> $REPORT
+          echo "<table>" >> $REPORT
+          echo "<tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>" >> $REPORT
+          
+          if [ -f code/code.tsv ]; then
+          
+            while IFS=$'\t' read -r rule sev file line code; do
+          
+              CLASS="low"
+              [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
+              [[ "$sev" == "HIGH" ]] && CLASS="high"
+              [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
+          
+              echo "<tr class='$CLASS'>
+                <td>$rule</td>
+                <td>$sev</td>
+                <td>$file</td>
+                <td>$line</td>
+                <td><pre>$code</pre></td>
+              </tr>" >> $REPORT
+          
+            done < code/code.tsv
+          
+          else
+            echo "<tr><td colspan='5'>No code vulnerabilities found</td></tr>" >> $REPORT
+          fi
+          
+          echo "</table>" >> $REPORT
 
           cat <<EOF > $REPORT
           <html><head>
