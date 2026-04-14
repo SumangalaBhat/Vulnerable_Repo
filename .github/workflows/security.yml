@@ -141,11 +141,35 @@ jobs:
             echo "⚠️ No SARIF found"
             echo '{"runs":[]}' > reports/codeql.sarif
           fi
+
+      - name: Convert SARIF → TSV
+        run: |
+          mkdir -p processed
+      
+          FILE=$(find . -name "*.sarif" | head -1)
+      
+          if [ -f "$FILE" ]; then
+            echo "Processing SARIF..."
+      
+            jq -r '
+              .runs[].results[]? |
+              [
+                .ruleId,
+                .level,
+                .message.text,
+                .locations[0].physicalLocation.artifactLocation.uri
+              ] | @tsv
+            ' "$FILE" > processed/codeql.tsv
+      
+          else
+            echo "No SARIF found"
+            echo "" > processed/codeql.tsv
+          fi
   
       - uses: actions/upload-artifact@v4
         with:
           name: codeql
-          path: reports/
+          path: processed/
 
 # 🔹 5. GIT + PR INFO
   git-info:
@@ -246,6 +270,21 @@ jobs:
         run: |
           mkdir -p public
           REPORT=public/report.html
+
+          if [ -f codeql/codeql.tsv ]; then
+
+          while IFS=$'\t' read -r rule sev msg file; do
+            CLASS="low"
+            [[ "$sev" == "error" ]] && CLASS="critical"
+            [[ "$sev" == "warning" ]] && CLASS="high"
+        
+            echo "<tr class='$CLASS'><td>$rule</td><td>$sev</td><td>$msg</td><td>$file</td></tr>" >> $REPORT
+        
+          done < codeql/codeql.tsv
+        
+            else
+              echo "<tr><td colspan='4'>No CodeQL vulnerabilities found</td></tr>" >> $REPORT
+            fi
 
           cat <<EOF > $REPORT
           <html><head>
