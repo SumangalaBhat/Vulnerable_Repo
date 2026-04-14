@@ -129,61 +129,80 @@ jobs:
         run: |
           echo "Total=$TOTAL High=$HIGH Medium=$MEDIUM Low=$LOW"
 
-# =========================
-# 🔹 Stage 6: Auto Remediation (SAFE)
-# =========================
+  # =========================
+  # 🔹 Stage 6: Auto Remediation (SAFE + GOVERNED)
+  # =========================
   auto-remediation:
     runs-on: ubuntu-latest
     needs: code-scan
-
+  
+    permissions:
+      contents: write
+      pull-requests: write
+  
     steps:
       - uses: actions/checkout@v4
-
-      - name: Create or Reset Fix Branch (SAFE)
+  
+      # =========================
+      # 🚨 BLOCK MERGE IF HIGH/CRITICAL
+      # =========================
+      - name: Block if HIGH/CRITICAL vulnerabilities exist
         run: |
-          git fetch origin
-      
-          if git ls-remote --exit-code --heads origin auto-fix/security-fixes; then
-            echo "✅ Branch exists → resetting"
-            git checkout auto-fix/security-fixes
-            git reset --hard origin/auto-fix/security-fixes
+          CRITICAL=${{ env.CRITICAL }}
+          HIGH=${{ env.HIGH }}
+  
+          echo "CRITICAL=$CRITICAL"
+          echo "HIGH=$HIGH"
+  
+          # fallback safety
+          CRITICAL=${CRITICAL:-0}
+          HIGH=${HIGH:-0}
+  
+          if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+            echo "❌ Blocking due to HIGH/CRITICAL vulnerabilities"
+            exit 1
           else
-            echo "🆕 Branch does not exist → creating"
-            git checkout -b auto-fix/security-fixes origin/main
+            echo "✅ No blocking vulnerabilities"
           fi
-
-      # 🔴 Fix properties secrets
+  
+      # =========================
+      # 🔴 AUTO FIXES
+      # =========================
+  
       - name: Fix hardcoded secrets (properties)
         run: |
           find . -name "*.properties" -type f | while read file; do
             sed -i 's/\(password=\).*/\1${DB_PASSWORD}/g' "$file"
             sed -i 's/\(secret=\).*/\1${SECRET_KEY}/g' "$file"
           done
-
-      # 🔴 Fix Java secrets
+  
       - name: Fix hardcoded secrets (Java)
         run: |
           find . -name "*.java" -type f | while read file; do
             sed -i 's/String password *= *".*"/String password = System.getenv("DB_PASSWORD")/g' "$file"
             sed -i 's/String secret *= *".*"/String secret = System.getenv("SECRET_KEY")/g' "$file"
           done
-
-      # 🔴 Remove dangerous exec
-      - name: Replace Runtime.exec
+  
+      - name: Replace Runtime.exec (Command Injection guard)
         run: |
           find . -name "*.java" -type f | while read file; do
-            sed -i 's/Runtime.getRuntime().exec/\/\/ TODO: Fix Command Injection/g' "$file"
+            sed -i 's/Runtime.getRuntime().exec/\/\/ TODO: FIX: Command Injection Risk/g' "$file"
           done
-
-      # 🔄 Commit changes
+  
+      # =========================
+      # 🔄 COMMIT CHANGES
+      # =========================
       - name: Commit changes
         run: |
           git config user.name "security-bot"
           git config user.email "security@bot.com"
-
+  
           git add .
           git commit -m "🔐 Auto-fix: removed hardcoded secrets & unsafe code" || echo "No changes"
-
+  
+      # =========================
+      # 🚀 CREATE PR + AUTO REVIEWERS
+      # =========================
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
@@ -192,16 +211,51 @@ jobs:
           base: main
           delete-branch: true
           commit-message: "🔐 Auto Security Fixes"
+  
           title: "🔐 Auto Security Fixes"
           body: |
             Automated fixes applied:
             - Removed hardcoded secrets
             - Externalized credentials
             - Flagged unsafe patterns
-      
+  
+            🚨 Merge blocked if HIGH/CRITICAL vulnerabilities exist
+  
             ⚠️ Manual fixes required:
             - SQL Injection
-            - Auth logic
+            - Authentication logic
+  
+          reviewers: |
+            repo-owner
+            dev-lead
+  
+          # ✅ Assign security team ONLY if risk exists
+          team-reviewers: ${{ (env.CRITICAL != '0' || env.HIGH != '0') && 'security-team' || '' }}
+  
+      # =========================
+      # 💬 OPTIONAL: COMMENT ON PR
+      # =========================
+      - name: Comment on PR if blocked
+        if: env.CRITICAL != '0' || env.HIGH != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: context.repo.owner + ":auto-fix/security-fixes"
+            });
+  
+            if (prs.data.length > 0) {
+              const prNumber = prs.data[0].number;
+  
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: "🚨 High/Critical vulnerabilities detected. Merge is BLOCKED until resolved."
+              });
+            }
 
 
 
