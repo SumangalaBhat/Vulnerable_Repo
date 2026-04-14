@@ -55,8 +55,21 @@ jobs:
       - name: Process Scan Results
         id: count
         run: |
-          HIGH=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' scan/results.json || echo 0)
+          HIGH=$(jq '[.results[]? | select(.extra.severity=="ERROR")] | length' code/semgrep.json 2>/dev/null || echo 0)
           echo "high=$HIGH" >> $GITHUB_OUTPUT
+
+          mkdir -p scan
+          semgrep scan --config auto --json > scan/results.json || true
+
+          FILE="code/semgrep.json"
+
+          CRITICAL=$(jq '[.results[]? | select(.extra.severity=="ERROR")] | length' "$FILE" 2>/dev/null || echo 0)
+          MEDIUM=$(jq '[.results[]? | select(.extra.severity=="WARNING")] | length' "$FILE" 2>/dev/null || echo 0)
+          LOW=$(jq '[.results[]? | select(.extra.severity=="INFO")] | length' "$FILE" 2>/dev/null || echo 0)
+          
+          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
+          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW=$LOW" >> $GITHUB_ENV
 
 # =========================
 # 🔹 Stage 4: Auto Fix (Agent)
@@ -84,13 +97,13 @@ jobs:
           semgrep scan --config auto --autofix || true
 
       # 🤖 Agent 2: OpenRewrite
-      - name: OpenRewrite Fix
+      - name: OpenRewrite Fix (Safe)
         run: |
-          mvn -q org.openrewrite.maven:rewrite-maven-plugin:run \
-            -Drewrite.activeRecipes=\
-            org.openrewrite.java.security.NoHardcodedPasswords,\
-            org.openrewrite.java.security.UsePreparedStatements \
-                        || true
+          echo "Running OpenRewrite..."
+            mvn -B org.openrewrite.maven:rewrite-maven-plugin:run \
+              -Drewrite.activeRecipes="org.openrewrite.java.security.NoHardcodedPasswords,org.openrewrite.java.security.UsePreparedStatements" \
+              -Drewrite.failOnDryRunResults=false \
+              || echo "OpenRewrite skipped"
 
       # 🤖 Agent 3: Custom Fix
       - name: Custom Fixes
@@ -133,14 +146,26 @@ jobs:
         run: |
           git checkout -b auto-fix/${GITHUB_REF_NAME} || git checkout auto-fix/${GITHUB_REF_NAME}
 
-      - name: Commit Fixes
+      - name: Commit & Push (Robust)
         run: |
           git config user.name "agentic-bot"
           git config user.email "bot@ai.com"
-
+      
           git add .
           git commit -m "🤖 Auto security fixes" || echo "No changes"
-          git push origin auto-fix/${GITHUB_REF_NAME}
+      
+          BRANCH="auto-fix/${GITHUB_REF_NAME}"
+      
+          git fetch origin
+      
+          if git ls-remote --exit-code --heads origin $BRANCH; then
+            echo "Branch exists → rebasing"
+            git pull --rebase origin $BRANCH || true
+          else
+            echo "New branch → pushing"
+          fi
+      
+          git push origin $BRANCH
 
       - name: Create PR
         uses: peter-evans/create-pull-request@v6
