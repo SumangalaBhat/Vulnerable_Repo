@@ -220,49 +220,72 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Generate HTML
+      - name: Generate HTML Report
         run: |
           mkdir -p public
-          REPORT=public/index.html
-
+          REPORT=public/security-report.html
+      
           cat <<EOF > $REPORT
           <html><body>
           <h1>🚨 Security Dashboard</h1>
-
+      
           <h2>Summary</h2>
           <table border="1">
-          <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
-          <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
-          <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
-          <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
-          <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
+          <tr><td>Total</td><td>${TOTAL:-0}</td></tr>
+          <tr><td>Critical</td><td>${CRITICAL:-0}</td></tr>
+          <tr><td>High</td><td>${HIGH:-0}</td></tr>
+          <tr><td>Medium</td><td>${MEDIUM:-0}</td></tr>
+          <tr><td>Low</td><td>${LOW:-0}</td></tr>
           </table>
-
+      
           <h2>💻 Code Issues</h2>
           <table border="1">
           <tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>
           EOF
-
+      
           if [ -f code/code.tsv ]; then
             while IFS=$'\t' read -r r s f l c; do
               echo "<tr><td>$r</td><td>$s</td><td>$f</td><td>$l</td><td><pre>$c</pre></td></tr>" >> $REPORT
             done < code/code.tsv
+          else
+            echo "<tr><td colspan='5'>No issues found</td></tr>" >> $REPORT
           fi
-
+      
           echo "</table><h2>Git Info</h2><pre>" >> $REPORT
-          cat git/git.txt >> $REPORT
+      
+          if [ -f git/git.txt ]; then
+            cat git/git.txt >> $REPORT
+          else
+            echo "No git info available" >> $REPORT
+          fi
+      
           echo "</pre></body></html>" >> $REPORT
+
+          - name: Create Root Index
+            run: |
+              echo "<h1>🌿 Branch Dashboards</h1><ul>" > public/index.html
+          
+              for dir in public/*/; do
+                name=$(basename "$dir")
+                echo "<li><a href='./$name/'>$name</a></li>" >> public/index.html
+              done
+          
+              echo "</ul>" >> public/index.html
 
           - name: Prepare Branch Folder
             run: |
               BRANCH=${GITHUB_REF_NAME}
+          
+              echo "Deploying report for branch: $BRANCH"
+          
               mkdir -p public/$BRANCH
-              cp public/security-report.html public/$BRANCH/index.html
-      
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
+          
+              if [ -f public/security-report.html ]; then
+                cp public/security-report.html public/$BRANCH/index.html
+              else
+                echo "❌ Report not found!"
+                exit 1
+              fi
 
   deploy-pages:
     needs: dashboard
