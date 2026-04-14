@@ -78,32 +78,50 @@ jobs:
           distribution: temurin
           java-version: 11
   
+      # ✅ IMPORTANT: ensure correct directory
+      - name: Verify project structure
+        run: |
+          echo "Listing files..."
+          ls -R
+          echo "Check pom.xml"
+          find . -name "pom.xml"
+  
       # ✅ INIT
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: java
+          build-mode: manual   # 🔥 important
   
-      # ✅ 🔥 IMPORTANT BUILD STEP (THIS FIXES YOUR ERROR)
-      - name: Build Project (MANDATORY)
-        run: mvn clean compile -DskipTests
-  
-      # Optional debug
-      - name: Verify Build Output
+      # ✅ FORCE CLEAN BUILD (no cache)
+      - name: Build with Maven (VISIBLE TO CODEQL)
         run: |
-          echo "Checking compiled classes..."
-          ls -R target || true
+          mvn -B clean compile -DskipTests
+  
+      # ✅ DEBUG: ensure classes exist
+      - name: Verify compiled classes
+        run: |
+          if [ ! -d "target/classes" ]; then
+            echo "❌ No compiled classes found!"
+            exit 1
+          fi
+          echo "✅ Classes found"
+          find target/classes | head
   
       # ✅ ANALYZE
-      - name: Run CodeQL Analysis
+      - name: Run CodeQL
         uses: github/codeql-action/analyze@v3
   
       # ✅ EXPORT SARIF
-      - name: Save SARIF
+      - name: Export SARIF
         run: |
           mkdir -p reports
-          find . -name "*.sarif"
-          cp $(find . -name "*.sarif" | head -1) reports/codeql.sarif || true
+          FILE=$(find . -name "*.sarif" | head -1)
+          if [ -f "$FILE" ]; then
+            cp "$FILE" reports/codeql.sarif
+          else
+            echo "No SARIF found"
+          fi
   
       - uses: actions/upload-artifact@v4
         with:
