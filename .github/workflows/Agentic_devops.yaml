@@ -9,134 +9,73 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  pages: write
-  id-token: write
+  security-events: write
 
 jobs:
 
 # =========================
-# 🔹 Stage 1: Setup
+# 🔹 Stage 1: Checkout
 # =========================
-  setup:
+  checkout:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
 
 # =========================
-# 🔹 Stage 2: Git Info
+# 🔹 Stage 2: Scan (Semgrep)
 # =========================
-  git-info:
+  scan:
     runs-on: ubuntu-latest
-    needs: setup
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Collect Git Info
-        run: |
-          mkdir -p git
-          git log -1 --pretty=format:"Author: %an%nEmail: %ae%nDate: %ad%nMessage: %s" > git/git.txt
-          echo -e "\n\nChanged Files:" >> git/git.txt
-          git diff --name-only HEAD~1 >> git/git.txt || true
-          echo -e "\n\nPR Author: ${{ github.actor }}" >> git/git.txt
-          echo "Branch: ${{ github.ref_name }}" >> git/git.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: git-data
-          path: git/
-
-# =========================
-# 🔹 Stage 3: Code Scan
-# =========================
-  code-scan:
-    runs-on: ubuntu-latest
-    needs: setup
+    needs: checkout
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tools
-        run: |
-          pip install semgrep
-          sudo apt-get install -y jq
+      - name: Install Semgrep
+        run: pip install semgrep
 
       - name: Run Scan
         run: |
-          mkdir -p code
-          semgrep scan --config auto --json > code/semgrep.json || true
-
-      - name: Convert to TSV
-        run: |
-          jq -r '.results[]? | [.check_id, .extra.severity, .path, (.start.line|tostring), .extra.message] | @tsv' code/semgrep.json > code/code.tsv || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: code-data
-          path: code/
+          mkdir -p scan
+          semgrep scan --config auto --json > scan/results.json || true
 
 # =========================
-# 🔹 Stage 4: AI Suggestions
+# 🔹 Stage 3: Analyze
 # =========================
-  ai-suggestions:
+  analyze:
     runs-on: ubuntu-latest
-    needs: code-scan
-    if: always()
+    needs: scan
+
+    outputs:
+      HIGH: ${{ steps.count.outputs.high }}
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: code-data
-          path: code
+      - uses: actions/checkout@v4
 
-      - name: Generate AI Fix Suggestions
+      - name: Process Scan Results
+        id: count
         run: |
-          mkdir -p ai
-
-          if [ -f code/code.tsv ]; then
-            while IFS=$'\t' read -r rule sev file line msg; do
-
-              FIX="Review manually"
-
-              if echo "$msg" | grep -qiE "secret|password|token"; then
-                FIX="Move to environment variables or GitHub Secrets"
-              elif echo "$msg" | grep -qi "sql"; then
-                FIX="Use PreparedStatement to prevent SQL injection"
-              elif echo "$msg" | grep -qi "exec"; then
-                FIX="Avoid Runtime.exec and validate inputs"
-              fi
-
-              echo -e "$rule\t$sev\t$file\t$line\t$msg\t$FIX" >> ai/ai.tsv
-
-            done < code/code.tsv
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ai-data
-          path: ai/
+          HIGH=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' scan/results.json || echo 0)
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
 
 # =========================
-# 🔹 Stage 5: Auto Remediation (Agents)
+# 🔹 Stage 4: Auto Fix (Agent)
 # =========================
-  auto-remediation:
+  auto-fix:
     runs-on: ubuntu-latest
-    needs: code-scan
+    needs: analyze
     if: always()
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
       # 🤖 Agent 1: Semgrep Autofix
       - name: Semgrep Autofix
@@ -148,7 +87,10 @@ jobs:
       - name: OpenRewrite Fix
         run: |
           mvn -q org.openrewrite.maven:rewrite-maven-plugin:run \
-            -Drewrite.activeRecipes=org.openrewrite.java.security.NoHardcodedPasswords || true
+            -Drewrite.activeRecipes=\
+org.openrewrite.java.security.NoHardcodedPasswords,\
+org.openrewrite.java.security.UsePreparedStatements \
+            || true
 
       # 🤖 Agent 3: Custom Fix
       - name: Custom Fixes
@@ -158,104 +100,131 @@ jobs:
             sed -i 's/Runtime.getRuntime().exec/\/\/ BLOCKED_EXEC/g' "$f"
           done
 
-      # Create branch safely
-      - name: Create Fix Branch
-        run: |
-          git fetch origin
-          git checkout -B auto-fix/agentic origin/${GITHUB_REF_NAME} || git checkout -b auto-fix/agentic
-
-      - name: Commit & Push
-        run: |
-          git config user.name "agentic-bot"
-          git config user.email "bot@devsecops.com"
-          git add .
-          git commit -m "🤖 Agentic security fixes" || echo "No changes"
-          git push origin auto-fix/agentic --force
-
 # =========================
-# 🔹 Stage 6: Dashboard
+# 🔹 Stage 5: Re-test
 # =========================
-  dashboard:
+  retest:
     runs-on: ubuntu-latest
-    needs: [ai-suggestions, git-info]
+    needs: auto-fix
     if: always()
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: code-data
-          path: code
+      - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: ai-data
-          path: ai
+      - name: Re-run Scan
+        run: |
+          pip install semgrep
+          semgrep scan --config auto || true
 
-      - uses: actions/download-artifact@v4
+# =========================
+# 🔹 Stage 6: PR Creation
+# =========================
+  create-pr:
+    runs-on: ubuntu-latest
+    needs: auto-fix
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: git-data
-          path: git
+          fetch-depth: 0
+
+      - name: Create Fix Branch
+        run: |
+          git checkout -b auto-fix/${GITHUB_REF_NAME} || git checkout auto-fix/${GITHUB_REF_NAME}
+
+      - name: Commit Fixes
+        run: |
+          git config user.name "agentic-bot"
+          git config user.email "bot@ai.com"
+
+          git add .
+          git commit -m "🤖 Auto security fixes" || echo "No changes"
+          git push origin auto-fix/${GITHUB_REF_NAME}
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto-fix/${{ github.ref_name }}
+          base: ${{ github.ref_name }}
+          title: "🤖 Auto Security Fixes"
+          body: |
+            Auto-remediation applied using AI agents.
+            Please review before merging.
+
+# =========================
+# 🔹 Stage 7: Dashboard
+# =========================
+  dashboard:
+    runs-on: ubuntu-latest
+    needs: [analyze, retest]
+    if: always()
+
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Generate HTML
         run: |
           mkdir -p public
           REPORT=public/security-report.html
 
-          echo "<html><body><h1>🤖 Agentic Dashboard</h1>" > $REPORT
+          cat <<EOF > $REPORT
+          <html><body>
+          <h1>🚨 Agentic Security Dashboard</h1>
+          <p>Branch: ${GITHUB_REF_NAME}</p>
+          <p>High Issues: ${{ needs.analyze.outputs.HIGH }}</p>
+          </body></html>
+          EOF
 
-          echo "<h2>Code Issues</h2><table border='1'>" >> $REPORT
-          echo "<tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Message</th></tr>" >> $REPORT
-
-          REPO_URL="https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}"
-
-          if [ -f code/code.tsv ]; then
-            while IFS=$'\t' read -r r s f l m; do
-              CLEAN=$(echo "$f" | sed 's|^\./||')
-              URL="$REPO_URL/$CLEAN#L$l"
-              echo "<tr><td>$r</td><td>$s</td><td><a href='$URL'>$CLEAN</a></td><td>$l</td><td>$m</td></tr>" >> $REPORT
-            done < code/code.tsv
-          fi
-
-          echo "</table>" >> $REPORT
-
-          echo "<h2>🤖 AI Fix Suggestions</h2><table border='1'>" >> $REPORT
-          echo "<tr><th>File</th><th>Fix</th></tr>" >> $REPORT
-
-          if [ -f ai/ai.tsv ]; then
-            while IFS=$'\t' read -r r s f l m fix; do
-              CLEAN=$(echo "$f" | sed 's|^\./||')
-              URL="$REPO_URL/$CLEAN#L$l"
-              echo "<tr><td><a href='$URL'>$CLEAN</a></td><td>$fix</td></tr>" >> $REPORT
-            done < ai/ai.tsv
-          fi
-
-          echo "</table>" >> $REPORT
-
-          echo "<h2>Git Info</h2><pre>" >> $REPORT
-          [ -f git/git.txt ] && cat git/git.txt >> $REPORT || echo "No git info" >> $REPORT
-          echo "</pre></body></html>" >> $REPORT
-
-      - name: Branch Dashboard
+      - name: Branch Folder
         run: |
-          mkdir -p public/${GITHUB_REF_NAME}
-          cp public/security-report.html public/${GITHUB_REF_NAME}/index.html
+          BRANCH=${GITHUB_REF_NAME}
+          mkdir -p public/$BRANCH
+          cp public/security-report.html public/$BRANCH/index.html
 
       - name: Root Index
         run: |
-          echo "<h1>Dashboards</h1><a href='./${GITHUB_REF_NAME}/'>${GITHUB_REF_NAME}</a>" > public/index.html
+          echo "<h1>Dashboards</h1>" > public/index.html
+          echo "<a href='./${GITHUB_REF_NAME}/'>Current Branch</a>" >> public/index.html
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload Pages
+        uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
 # =========================
-# 🔹 Stage 7: Deploy Pages
+# 🔹 Stage 8: Deploy Pages
 # =========================
-  deploy-pages:
+  deploy:
     runs-on: ubuntu-latest
     needs: dashboard
     if: always()
 
+    permissions:
+      pages: write
+      id-token: write
+
     steps:
       - uses: actions/configure-pages@v5
       - uses: actions/deploy-pages@v4
+
+# =========================
+# 🔹 Stage 9: Block Merge (but continue)
+# =========================
+  block-merge:
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: always()
+
+    steps:
+      - name: Fail if HIGH exists
+        run: |
+          if [ "${{ needs.analyze.outputs.HIGH }}" -gt 0 ]; then
+            echo "❌ HIGH vulnerabilities detected"
+            exit 1
+          fi
