@@ -134,6 +134,16 @@ jobs:
           mkdir -p public
           REPORT=public/security-report.html
 
+          echo "<h2>Git Info</h2><pre>" >> $REPORT
+
+          if [ -f git/git.txt ]; then
+            cat git/git.txt >> $REPORT
+          else
+            echo "No Git info available" >> $REPORT
+          fi
+          
+          echo "</pre></body></html>" >> $REPORT
+
           echo "<html><body>" > $REPORT
           echo "<h1>🤖 Agentic Dashboard</h1>" >> $REPORT
 
@@ -175,6 +185,18 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
+
+      - name: Download Code Data
+        uses: actions/download-artifact@v4
+        with:
+          name: code-data
+          path: code
+      
+      - name: Download Git Data
+        uses: actions/download-artifact@v4
+        with:
+          name: git-data
+          path: git
 
   # =========================
   # 🔹 Stage 6: Deploy Pages
