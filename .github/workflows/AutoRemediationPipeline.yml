@@ -215,6 +215,7 @@ jobs:
   dashboard:
     runs-on: ubuntu-latest
     needs: [process, code-scan, git-info]
+    if: always()
 
     steps:
       - uses: actions/download-artifact@v4
@@ -259,6 +260,7 @@ jobs:
   deploy-pages:
     needs: dashboard
     runs-on: ubuntu-latest
+    if: always()
 
     steps:
       - uses: actions/deploy-pages@v4
@@ -302,28 +304,41 @@ jobs:
 # =========================
 # 🔹 Stage 9: Auto Remediation + PR
 # =========================
-  auto-fix:
+  auto-remediation:
     runs-on: ubuntu-latest
     needs: code-scan
-
+  
+    permissions:
+      contents: write
+      pull-requests: write
+  
+    outputs:
+      high: ${{ needs.code-scan.outputs.high }}
+  
     steps:
       - uses: actions/checkout@v4
-
-      - run: |
-          git checkout -b auto-fix/security-fixes || git checkout auto-fix/security-fixes
-
+  
+      - name: Create Fix Branch
+        run: |
+          git fetch origin
+          git checkout -B auto-fix/security-fixes origin/main
+  
+      # 🔴 Fixes
+      - name: Fix secrets
+        run: |
           find . -name "*.properties" -exec sed -i 's/password=.*/password=${DB_PASSWORD}/g' {} \;
-
+  
+      - name: Commit
+        run: |
           git config user.name "sumangalabhat"
           git config user.email "sumangala.bhat18@gmail.com"
-
           git add .
-          git commit -m "Auto security fixes" || true
-          git push origin auto-fix/security-fixes --force
-
-      - uses: peter-evans/create-pull-request@v6
+          git commit -m "Auto fix" || echo "No changes"
+  
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
           branch: auto-fix/security-fixes
           base: main
-          title: "🔐 Auto Security Fixes"
+          title: "Auto Security Fixes"
