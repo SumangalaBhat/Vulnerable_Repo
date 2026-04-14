@@ -393,34 +393,54 @@ jobs:
   # 🔹 Stage 8: Deploy to GitHub Pages
   # =========================
   deploy-pages:
-    runs-on: ubuntu-latest
-    needs: html-report
-  
-    permissions:
-      pages: write
-      id-token: write
-  
-    steps:
-      - name: Download Report
-        uses: actions/download-artifact@v4
-        with:
-          name: security-dashboard
-          path: public
-  
-      # ✅ VERY IMPORTANT: must be index.html
-      - name: Rename report
-        run: |
-          if [ -f public/security-report.html ]; then
-            mv public/security-report.html public/index.html
-          fi
-  
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-  
-      - name: Upload Pages Artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-  
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+  runs-on: ubuntu-latest
+  needs: html-report
+
+  permissions:
+    pages: write
+    id-token: write
+
+  steps:
+    - name: Download Report
+      uses: actions/download-artifact@v4
+      with:
+        path: public
+
+    - name: Prepare index.html
+      run: |
+        if [ -f public/security-report.html ]; then
+          mv public/security-report.html public/index.html
+        fi
+
+        if [ ! -f public/index.html ]; then
+          echo "<h1>No report generated</h1>" > public/index.html
+        fi
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v5
+
+    - name: Upload Pages Artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: public
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+    # ✅ FIXED URL LOGIC
+    - name: Print Dashboard URL
+      run: |
+        BASE_URL="${{ steps.deployment.outputs.page_url }}"
+        BRANCH="${GITHUB_REF_NAME}"
+
+        echo "🌐 Base URL:"
+        echo "$BASE_URL"
+
+        if [ "$BRANCH" = "main" ]; then
+          echo "✅ Main Dashboard:"
+          echo "$BASE_URL"
+        else
+          echo "🌿 Branch Dashboard:"
+          echo "$BASE_URL$BRANCH/"
+        fi
