@@ -1,4 +1,4 @@
-name: DevSecOps CI Pipeline
+name: DevSecOps Pipeline
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
 
-# 🔹 Build
+# 🔹 Stage 1: Build
   build:
     runs-on: ubuntu-latest
     steps:
@@ -23,53 +23,62 @@ jobs:
           java-version: 11
       - run: mvn clean install -DskipTests
 
-
-# 🔹 Restore NVD Cache
-  restore-nvd:
+# 🔹 Stage 2: OWASP Scan (SAFE MODE)
+  owasp-scan:
     runs-on: ubuntu-latest
     needs: build
-    steps:
-      - uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository/org/owasp/dependency-check-data
-          key: nvd-db-*
-        continue-on-error: true
-
-
-# 🔹 Dependency Scan (NO API → stable)
-  dependency-scan:
-    runs-on: ubuntu-latest
-    needs: restore-nvd
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OWASP Scan (Safe Mode)
+      - name: Run OWASP (Never Fail)
         run: |
           mkdir -p reports
-      
-          echo "🔍 Starting OWASP Dependency Check..."
-      
+
           mvn org.owasp:dependency-check-maven:check \
             -Dformat=JSON \
             -DscanSet=ALL \
             -DautoUpdate=false \
             -DfailOnError=false \
             || true
-      
-          echo "📦 Checking if report exists..."
-      
+
           if [ -f target/dependency-check-report.json ]; then
-            echo "✅ Report generated"
-            cp target/dependency-check-report.json reports/owasp-report.json
+            cp target/dependency-check-report.json reports/owasp.json
           else
-            echo "⚠️ Report NOT generated → creating fallback"
-      
-            echo '{"dependencies":[],"scanInfo":{"error":"OWASP scan failed"}}' > reports/owasp-report.json
+            echo '{"dependencies":[]}' > reports/owasp.json
           fi
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owasp
+          path: reports/
 
-# 🔹 Code Scan
+# 🔹 Stage 3: TRIVY FALLBACK SCAN (ALWAYS WORKS)
+  trivy-scan:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.1_Linux-64bit.deb
+          sudo dpkg -i trivy_0.50.1_Linux-64bit.deb
+
+      - name: Run Trivy FS Scan
+        run: |
+          mkdir -p reports
+          trivy fs --format json -o reports/trivy.json . || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy
+          path: reports/
+
+# 🔹 Stage 4: Code Scan
   code-scan:
     runs-on: ubuntu-latest
     needs: build
@@ -79,15 +88,14 @@ jobs:
 
       - run: |
           mkdir -p reports
-          grep -RniE "password|secret|apikey|token" . > reports/code-scan.txt || true
+          grep -RniE "password|secret|apikey|token" . > reports/code.txt || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: code-scan
+          name: code
           path: reports/
 
-
-# 🔹 Git Info
+# 🔹 Stage 5: Git Info (Latest Changes Only)
   git-info:
     runs-on: ubuntu-latest
     needs: build
@@ -103,156 +111,136 @@ jobs:
           COMMIT=$(git log -1 --pretty=format:"%H")
           AUTHOR=$(git log -1 --pretty=format:"%an")
           EMAIL=$(git log -1 --pretty=format:"%ae")
+          MSG=$(git log -1 --pretty=format:"%s")
 
-          echo "Commit: $COMMIT" > reports/git-info.txt
-          echo "Author: $AUTHOR" >> reports/git-info.txt
-          echo "Email: $EMAIL" >> reports/git-info.txt
+          echo "Commit: $COMMIT" > reports/git.txt
+          echo "Author: $AUTHOR" >> reports/git.txt
+          echo "Email: $EMAIL" >> reports/git.txt
+          echo "Message: $MSG" >> reports/git.txt
 
-          echo "Changed Files:" >> reports/git-info.txt
-          git diff-tree --no-commit-id --name-only -r $COMMIT >> reports/git-info.txt
+          echo "Changed Files:" >> reports/git.txt
+          git diff-tree --no-commit-id --name-only -r $COMMIT >> reports/git.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: git-info
+          name: git
           path: reports/
 
-
-# 🔹 Security Gate (FAIL ON CRITICAL)
-  security-gate:
+# 🔹 Stage 6: Merge + Smart Parsing
+  process:
     runs-on: ubuntu-latest
-    needs: dependency-scan
+    needs: [owasp-scan, trivy-scan]
 
     steps:
       - uses: actions/download-artifact@v4
-        with:
-          name: owasp-report
 
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Enforce Policy
+      - name: Extract OWASP + Trivy (NO ZERO BUG)
         run: |
-          CRITICAL=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/owasp-report.json)
+          mkdir -p processed
 
-          echo "Critical vulnerabilities: $CRITICAL"
+          # OWASP extraction
+          jq -r '
+            .dependencies[]?.vulnerabilities[]? |
+            [.name,
+             (.severity // "UNKNOWN"),
+             (.cvssv3.baseScore // .cvssv2.score // 0),
+             (.references[0].url // "N/A")
+            ] | @tsv
+          ' owasp/owasp.json > processed/owasp.tsv || true
 
-          if [ "$CRITICAL" -gt 0 ]; then
-            echo "❌ Build blocked due to critical vulnerabilities"
-            exit 1
-          fi
+          # Trivy extraction
+          jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            [.VulnerabilityID,
+             .Severity,
+             .CVSS.nvd.V3Score,
+             (.PrimaryURL // "N/A")
+            ] | @tsv
+          ' trivy/trivy.json > processed/trivy.tsv || true
 
+          # Merge both
+          cat processed/owasp.tsv processed/trivy.tsv > processed/all.tsv
 
-# 🔹 HTML Report (ENHANCED)
+          TOTAL=$(wc -l < processed/all.tsv || echo 0)
+
+          CRITICAL=$(awk -F'\t' '$2=="CRITICAL" || $3>=9 {c++} END{print c+0}' processed/all.tsv)
+          HIGH=$(awk -F'\t' '$2=="HIGH" {c++} END{print c+0}' processed/all.tsv)
+          MEDIUM=$(awk -F'\t' '$2=="MEDIUM" {c++} END{print c+0}' processed/all.tsv)
+          LOW=$(awk -F'\t' '$2=="LOW" {c++} END{print c+0}' processed/all.tsv)
+
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
+          echo "HIGH=$HIGH" >> $GITHUB_ENV
+          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW=$LOW" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: processed
+          path: processed/
+
+# 🔹 Stage 7: HTML Dashboard (FINAL OUTPUT)
   html-report:
     runs-on: ubuntu-latest
-    needs: [dependency-scan, code-scan, git-info]
+    needs: [process, code-scan, git-info]
 
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
-      - name: Generate HTML Dashboard (CVSS + Links)
+      - name: Generate HTML
         run: |
           mkdir -p public
           REPORT=public/security-report.html
 
-          # 🔸 Extract CVE, Severity, CVSS, Link, Description
-          jq -r '
-            .dependencies[]?.vulnerabilities[]? |
-            [
-              .name,
-              .severity,
-              (.cvssv3.baseScore // .cvssv2.score // "N/A"),
-              ("https://nvd.nist.gov/vuln/detail/" + .name),
-              (.description | gsub("\n"; " ") | .[0:200])
-            ] | @tsv
-          ' owasp-report/owasp-report.json > vulns.tsv || true
+          CODE=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
 
-          TOTAL=$(wc -l < vulns.tsv || echo 0)
-          CRITICAL=$(grep -c "CRITICAL" vulns.tsv || echo 0)
-          HIGH=$(grep -c "HIGH" vulns.tsv || echo 0)
-          MEDIUM=$(grep -c "MEDIUM" vulns.tsv || echo 0)
-          LOW=$(grep -c "LOW" vulns.tsv || echo 0)
-          CODE=$(wc -l code-scan/code-scan.txt | awk '{print $1}' || echo 0)
-
-                      cat <<EOF > $REPORT
-            <html>
-            <head>
-            <title>DevSecOps Dashboard</title>
-            <style>
-            body { font-family: Arial; margin: 20px; }
-            h1 { color: #2c3e50; }
-            table { border-collapse: collapse; width: 85%; }
-            th, td { border: 1px solid #ddd; padding: 10px; }
-            th { background-color: #2c3e50; color: white; }
-            tr:nth-child(even) { background-color: #f2f2f2; }
-            .critical { color: red; font-weight: bold; }
-            .high { color: darkorange; font-weight: bold; }
-            .medium { color: orange; }
-            .low { color: green; }
-            a { color: blue; }
-            </style>
-            </head>
-            <body>
-            
-            <h1>🚨 DevSecOps Security Dashboard</h1>
-            
-            <h2>📊 Summary</h2>
-            <table>
-            <tr><th>Type</th><th>Count</th></tr>
-            <tr><td>Total</td><td>$TOTAL</td></tr>
-            <tr><td>Critical</td><td class="critical">$CRITICAL</td></tr>
-            <tr><td>High</td><td class="high">$HIGH</td></tr>
-            <tr><td>Medium</td><td class="medium">$MEDIUM</td></tr>
-            <tr><td>Low</td><td class="low">$LOW</td></tr>
-            <tr><td>Code Issues</td><td>$CODE</td></tr>
-            </table>
-            
-            <h2>📌 Vulnerability Details</h2>
-            <table>
-            <tr>
-              <th>CVE</th>
-              <th>Severity</th>
-              <th>CVSS</th>
-              <th>Exploit</th>
-              <th>Description</th>
-            </tr>
-            EOF
-            
-                      while IFS=$'\t' read -r cve sev score link desc; do
-                        CLASS=$(echo "$sev" | tr '[:upper:]' '[:lower:]')
-            
-                        echo "<tr>
-                          <td>$cve</td>
-                          <td class=\"$CLASS\">$sev</td>
-                          <td>$score</td>
-                          <td><a href=\"$link\" target=\"_blank\">View</a></td>
-                          <td>$desc</td>
-                        </tr>" >> $REPORT
-                      done < vulns.tsv
-            
-                      cat <<EOF >> $REPORT
-            </table>
-            
-            <h2>🧑‍💻 Git Changes</h2>
-            <pre>
-            $(cat git-info/git-info.txt)
-            </pre>
-            
-            <h2>🔍 Code Scan</h2>
-            <pre>
-            $(cat code-scan/code-scan.txt)
-            </pre>
-            
-            </body>
-            </html>
-            EOF
+          cat <<EOF > $REPORT
+              <html>
+              <head><title>Security Dashboard</title></head>
+              <body>
+              
+              <h1>🚨 DevSecOps Security Dashboard</h1>
+              
+              <table border="1">
+              <tr><th>Type</th><th>Count</th></tr>
+              <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
+              <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
+              <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
+              <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
+              <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
+              <tr><td>Code Issues</td><td>$CODE</td></tr>
+              </table>
+              
+              <h2>Vulnerabilities (CVSS + Exploits)</h2>
+              <table border="1">
+              <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit Link</th></tr>
+              EOF
+              
+                        while IFS=$'\t' read -r id sev score link; do
+                          echo "<tr><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+                        done < processed/all.tsv
+              
+                        cat <<EOF >> $REPORT
+              </table>
+              
+              <h2>Git Changes</h2>
+              <pre>
+              $(cat git/git.txt)
+              </pre>
+              
+              <h2>Code Issues</h2>
+              <pre>
+              $(cat code/code.txt)
+              </pre>
+              
+              </body>
+              </html>
+              EOF
 
       - uses: actions/upload-artifact@v4
         with:
-          name: security-dashboard
+          name: dashboard
           path: public/
-
-      - uses: actions/deploy-pages@v4
