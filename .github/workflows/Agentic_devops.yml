@@ -251,4 +251,196 @@ deploy-pages:
 
   steps:
     - uses: actions/configure-pages@v5
+    - uses: actions/deploy-pages@v4        path: git/
+
+# =========================
+# 🔹 Stage 3: Code Scan
+# =========================
+code-scan:
+  runs-on: ubuntu-latest
+  needs: setup
+
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Semgrep
+      run: pip install semgrep
+
+    - name: Run Scan
+      run: |
+        mkdir -p code
+        semgrep scan --config auto --json > code/semgrep.json || true
+
+    - name: Convert to TSV
+      run: |
+        jq -r '
+          .results[]? |
+          [.check_id, .extra.severity, .path, (.start.line|tostring), .extra.message]
+          | @tsv
+        ' code/semgrep.json > code/code.tsv || true
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: code-data
+        path: code/
+
+# =========================
+# 🔹 Stage 4: Agentic Auto Fix
+# =========================
+auto-remediation:
+  runs-on: ubuntu-latest
+  needs: code-scan
+  if: always()
+
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # 🤖 Semgrep Autofix
+    - name: Semgrep Autofix
+      run: |
+        pip install semgrep
+        semgrep scan --config auto --autofix || true
+
+    # 🤖 OpenRewrite
+    - name: OpenRewrite Fix
+      run: |
+        mvn -q org.openrewrite.maven:rewrite-maven-plugin:run \
+          -Drewrite.activeRecipes=org.openrewrite.java.security.NoHardcodedPasswords || true
+
+    # 🤖 Custom Fix
+    - name: Custom Fixes
+      run: |
+        find . -name "*.java" -type f | while read f; do
+          sed -i 's/"my-super-secret-key"/System.getenv("SECRET_KEY")/g' "$f"
+        done
+
+    # 🔀 Safe branch creation
+    - name: Create Branch
+      run: |
+        git fetch origin
+
+        if git ls-remote --exit-code --heads origin auto-fix/agentic; then
+          git checkout auto-fix/agentic
+        else
+          git checkout -b auto-fix/agentic
+        fi
+
+    - name: Commit & Push
+      run: |
+        git config user.name "agentic-bot"
+        git config user.email "bot@devsecops.com"
+
+        git add .
+        git commit -m "🤖 Agentic fixes" || echo "No changes"
+        git push origin auto-fix/agentic --force
+
+    - name: Create PR
+      uses: peter-evans/create-pull-request@v6
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: auto-fix/agentic
+        base: ${{ github.ref_name }}
+        title: "🤖 Agentic Security Fixes"
+        body: |
+          Auto-remediation applied:
+          - Removed secrets
+          - Fixed vulnerabilities
+
+# =========================
+# 🔹 Stage 5: Process Results
+# =========================
+process:
+  runs-on: ubuntu-latest
+  needs: code-scan
+
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: code-data
+        path: code
+
+    - name: Calculate Counts (SAFE)
+      run: |
+        FILE="code/code.tsv"
+
+        TOTAL=$(grep -c . "$FILE" 2>/dev/null || echo 0)
+        HIGH=$(awk -F'\t' '$2=="ERROR"{c++} END{print c+0}' "$FILE")
+        MEDIUM=$(awk -F'\t' '$2=="WARNING"{c++} END{print c+0}' "$FILE")
+
+        echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+        echo "HIGH=$HIGH" >> $GITHUB_ENV
+        echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+
+# =========================
+# 🔹 Stage 6: Dashboard (Branch-wise)
+# =========================
+dashboard:
+  runs-on: ubuntu-latest
+  needs: [process, git-info]
+  if: always()
+
+  steps:
+    - uses: actions/download-artifact@v4
+
+    - name: Generate HTML
+      run: |
+        mkdir -p public
+        REPORT=public/security-report.html
+
+        cat <<EOF > $REPORT
+        <html><body>
+        <h1>🤖 Agentic DevSecOps Dashboard</h1>
+
+        <h2>Summary</h2>
+        <table border="1">
+        <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
+        <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
+        <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
+        </table>
+
+        <h2>Code Issues</h2>
+        <table border="1">
+        <tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Message</th></tr>
+        EOF
+
+        if [ -f code/code.tsv ]; then
+          while IFS=$'\t' read -r r s f l m; do
+            echo "<tr><td>$r</td><td>$s</td><td>$f</td><td>$l</td><td>$m</td></tr>" >> $REPORT
+          done < code/code.tsv
+        fi
+
+        echo "</table><h2>Git Info</h2><pre>" >> $REPORT
+        cat git/git.txt >> $REPORT
+        echo "</pre></body></html>" >> $REPORT
+
+    # ✅ Branch-wise dashboard
+    - name: Create Branch Folder
+      run: |
+        BRANCH=${GITHUB_REF_NAME}
+        mkdir -p public/$BRANCH
+        cp public/security-report.html public/$BRANCH/index.html
+
+    # Root index
+    - name: Root Index
+      run: |
+        echo "<h1>Dashboards</h1>" > public/index.html
+        echo "<a href='./${GITHUB_REF_NAME}/'>${GITHUB_REF_NAME} Dashboard</a>" >> public/index.html
+
+    - name: Upload Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: public
+
+# =========================
+# 🔹 Stage 7: Deploy Pages
+# =========================
+deploy-pages:
+  runs-on: ubuntu-latest
+  needs: dashboard
+  if: always()
+
+  steps:
+    - uses: actions/configure-pages@v5
     - uses: actions/deploy-pages@v4
