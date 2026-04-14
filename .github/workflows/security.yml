@@ -230,135 +230,135 @@ jobs:
 # =========================
 # 🔹 Stage 7: Generate HTML Report
 # =========================
-html-report:
-  runs-on: ubuntu-latest
-  needs: [process, code-scan, git-info]
-
-  steps:
-    - uses: actions/download-artifact@v4
-
-    - name: Generate HTML Report
-      run: |
-        mkdir -p public
-        REPORT=public/security-report.html
-
-        # ✅ Safe code count
-        CODE_COUNT=$(wc -l code/code.tsv 2>/dev/null | awk '{print $1}')
-        CODE_COUNT=${CODE_COUNT:-0}
-
-        # =========================
-        # ✅ START HTML (WRITE ONCE)
-        # =========================
-        cat <<EOF > $REPORT
-        <html>
-        <head>
-        <title>Security Report</title>
-        <style>
-        body { font-family: Arial; }
-        table { border-collapse: collapse; width:100%; }
-        th,td { border:1px solid black; padding:8px; }
-        th { background:#333; color:white; }
-        .critical {background:#ff4d4d;}
-        .high {background:#ff944d;}
-        .medium {background:#ffd24d;}
-        .low {background:#d2ff4d;}
-        </style>
-        </head>
-        <body>
-
-        <h1>🚨 DevSecOps Security Report</h1>
-
-        <h2>Summary</h2>
-        <table>
-        <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
-        <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
-        <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
-        <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
-        <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
-        <tr><td>Code Issues</td><td>$CODE_COUNT</td></tr>
-        </table>
-
-        <h2>📊 Dependency Vulnerabilities</h2>
-        <table>
-        <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
-        EOF
-
-        # =========================
-        # ✅ Dependency Data
-        # =========================
-        if [ -f processed/sorted.tsv ]; then
-          while IFS=$'\t' read -r id sev score link; do
-
-            CLASS="low"
-            [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
-            [[ "$sev" == "HIGH" ]] && CLASS="high"
-            [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
-
-            echo "<tr class='$CLASS'>
-              <td>$id</td>
-              <td>$sev</td>
-              <td>$score</td>
-              <td><a href='$link'>Link</a></td>
-            </tr>" >> $REPORT
-
-          done < processed/sorted.tsv
-        else
-          echo "<tr><td colspan='4'>No dependency vulnerabilities found</td></tr>" >> $REPORT
-        fi
-
-        echo "</table>" >> $REPORT
-
-        # =========================
-        # ✅ Code Vulnerabilities
-        # =========================
-        echo "<h2>💻 Code Vulnerabilities (All Files)</h2>" >> $REPORT
-        echo "<table>" >> $REPORT
-        echo "<tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>" >> $REPORT
-
-        if [ -f code/code.tsv ]; then
-
-          while IFS=$'\t' read -r rule sev file line code; do
-
-            CLASS="low"
-            [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
-            [[ "$sev" == "HIGH" ]] && CLASS="high"
-            [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
-
-            echo "<tr class='$CLASS'>
-              <td>$rule</td>
-              <td>$sev</td>
-              <td>$file</td>
-              <td>$line</td>
-              <td><pre>$code</pre></td>
-            </tr>" >> $REPORT
-
-          done < code/code.tsv
-
-        else
-          echo "<tr><td colspan='5'>No code vulnerabilities found</td></tr>" >> $REPORT
-        fi
-
-        echo "</table>" >> $REPORT
-
-        # =========================
-        # ✅ Git Info
-        # =========================
-        echo "<h2>📌 Git Changes</h2><pre>" >> $REPORT
-
-        if [ -f git/git.txt ]; then
-          cat git/git.txt >> $REPORT
-        else
-          echo "No git info available" >> $REPORT
-        fi
-
-        echo "</pre>" >> $REPORT
-
-        # =========================
-        # ✅ END HTML
-        # =========================
-        echo "</body></html>" >> $REPORT
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: security-dashboard
-        path: public/
+  html-report:
+    runs-on: ubuntu-latest
+    needs: [process, code-scan, git-info]
+  
+    steps:
+      - uses: actions/download-artifact@v4
+  
+      - name: Generate HTML Report
+        run: |
+          mkdir -p public
+          REPORT=public/security-report.html
+  
+          # ✅ Safe code count
+          CODE_COUNT=$(wc -l code/code.tsv 2>/dev/null | awk '{print $1}')
+          CODE_COUNT=${CODE_COUNT:-0}
+  
+          # =========================
+          # ✅ START HTML (WRITE ONCE)
+          # =========================
+          cat <<EOF > $REPORT
+          <html>
+          <head>
+          <title>Security Report</title>
+          <style>
+          body { font-family: Arial; }
+          table { border-collapse: collapse; width:100%; }
+          th,td { border:1px solid black; padding:8px; }
+          th { background:#333; color:white; }
+          .critical {background:#ff4d4d;}
+          .high {background:#ff944d;}
+          .medium {background:#ffd24d;}
+          .low {background:#d2ff4d;}
+          </style>
+          </head>
+          <body>
+  
+          <h1>🚨 DevSecOps Security Report</h1>
+  
+          <h2>Summary</h2>
+          <table>
+          <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
+          <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
+          <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
+          <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
+          <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
+          <tr><td>Code Issues</td><td>$CODE_COUNT</td></tr>
+          </table>
+  
+          <h2>📊 Dependency Vulnerabilities</h2>
+          <table>
+          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
+          EOF
+  
+          # =========================
+          # ✅ Dependency Data
+          # =========================
+          if [ -f processed/sorted.tsv ]; then
+            while IFS=$'\t' read -r id sev score link; do
+  
+              CLASS="low"
+              [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
+              [[ "$sev" == "HIGH" ]] && CLASS="high"
+              [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
+  
+              echo "<tr class='$CLASS'>
+                <td>$id</td>
+                <td>$sev</td>
+                <td>$score</td>
+                <td><a href='$link'>Link</a></td>
+              </tr>" >> $REPORT
+  
+            done < processed/sorted.tsv
+          else
+            echo "<tr><td colspan='4'>No dependency vulnerabilities found</td></tr>" >> $REPORT
+          fi
+  
+          echo "</table>" >> $REPORT
+  
+          # =========================
+          # ✅ Code Vulnerabilities
+          # =========================
+          echo "<h2>💻 Code Vulnerabilities (All Files)</h2>" >> $REPORT
+          echo "<table>" >> $REPORT
+          echo "<tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>" >> $REPORT
+  
+          if [ -f code/code.tsv ]; then
+  
+            while IFS=$'\t' read -r rule sev file line code; do
+  
+              CLASS="low"
+              [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
+              [[ "$sev" == "HIGH" ]] && CLASS="high"
+              [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
+  
+              echo "<tr class='$CLASS'>
+                <td>$rule</td>
+                <td>$sev</td>
+                <td>$file</td>
+                <td>$line</td>
+                <td><pre>$code</pre></td>
+              </tr>" >> $REPORT
+  
+            done < code/code.tsv
+  
+          else
+            echo "<tr><td colspan='5'>No code vulnerabilities found</td></tr>" >> $REPORT
+          fi
+  
+          echo "</table>" >> $REPORT
+  
+          # =========================
+          # ✅ Git Info
+          # =========================
+          echo "<h2>📌 Git Changes</h2><pre>" >> $REPORT
+  
+          if [ -f git/git.txt ]; then
+            cat git/git.txt >> $REPORT
+          else
+            echo "No git info available" >> $REPORT
+          fi
+  
+          echo "</pre>" >> $REPORT
+  
+          # =========================
+          # ✅ END HTML
+          # =========================
+          echo "</body></html>" >> $REPORT
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-dashboard
+          path: public/
