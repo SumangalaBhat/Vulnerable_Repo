@@ -1,10 +1,9 @@
-name: Java Microservice DevSecOps Pipeline
+name: DevSecOps Pipeline
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,10 +11,19 @@ permissions:
 jobs:
 
 # =========================
-# 🔹 Stage 1: Build
+# 🔹 Stage 1: Checkout
+# =========================
+  checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+# =========================
+# 🔹 Stage 2: Build ALL Java Services
 # =========================
   build:
     runs-on: ubuntu-latest
+    needs: checkout
 
     steps:
       - uses: actions/checkout@v4
@@ -25,12 +33,25 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Build Project (Safe)
+      - name: Build All Maven Projects
         run: |
-          mvn clean compile -DskipTests || true
+          echo "🔍 Finding all pom.xml files..."
+          POMS=$(find . -name "pom.xml")
+
+          if [ -z "$POMS" ]; then
+            echo "⚠️ No Maven projects found"
+          fi
+
+          for POM in $POMS; do
+            DIR=$(dirname "$POM")
+            echo "📦 Building project in $DIR"
+            cd "$DIR"
+            mvn -B clean package -DskipTests || true
+            cd -
+          done
 
 # =========================
-# 🔹 Stage 2: Dependency Scan (OWASP)
+# 🔹 Stage 3: Dependency Scan (OWASP)
 # =========================
   dependency-scan:
     runs-on: ubuntu-latest
@@ -39,14 +60,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OWASP Scan
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Run OWASP Scan (safe)
         run: |
           mkdir -p reports
 
           mvn org.owasp:dependency-check-maven:check \
             -Dformat=JSON \
             -DfailOnError=false \
-            || true
+            -DautoUpdate=false || true
 
           if [ -f target/dependency-check-report.json ]; then
             cp target/dependency-check-report.json reports/owasp.json
@@ -60,7 +86,7 @@ jobs:
           path: reports/
 
 # =========================
-# 🔹 Stage 3: Custom Code Scan (ALL FILES)
+# 🔹 Stage 4: Code Scan (ALL FILES)
 # =========================
   code-scan:
     runs-on: ubuntu-latest
@@ -69,12 +95,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scan ALL files for vulnerabilities
+      - name: Scan ALL repo files
         run: |
           mkdir -p reports
 
-          # Scan entire repo
-          grep -RniE "password\s*=|secret\s*=|apikey\s*=|token\s*=|Runtime.getRuntime|SELECT .*\\+" . > reports/code.txt || true
+          echo "🔍 Scanning ALL files for vulnerabilities..."
+
+          grep -RniE "password|secret|apikey|token|exec\(|SELECT .* \+" . > reports/code.txt || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -82,11 +109,47 @@ jobs:
           path: reports/
 
 # =========================
-# 🔹 Stage 4: Process Vulnerabilities
+# 🔹 Stage 5: Git Info (Commit + PR + Author)
+# =========================
+  git-info:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extract Git Details
+        run: |
+          mkdir -p reports
+
+          COMMIT=$(git log -1 --pretty=format:"%H")
+          AUTHOR=$(git log -1 --pretty=format:"%an")
+          EMAIL=$(git log -1 --pretty=format:"%ae")
+          MESSAGE=$(git log -1 --pretty=format:"%s")
+
+          echo "Commit ID: $COMMIT" > reports/git.txt
+          echo "Author: $AUTHOR" >> reports/git.txt
+          echo "Email: $EMAIL" >> reports/git.txt
+          echo "Message: $MESSAGE" >> reports/git.txt
+
+          echo "Changed Files:" >> reports/git.txt
+          git diff-tree --no-commit-id --name-only -r $COMMIT >> reports/git.txt
+
+          echo "PR Number: ${{ github.event.pull_request.number || 'N/A' }}" >> reports/git.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: git
+          path: reports/
+
+# =========================
+# 🔹 Stage 6: Process + Count Vulnerabilities
 # =========================
   process:
     runs-on: ubuntu-latest
-    needs: [dependency-scan, code-scan]
+    needs: dependency-scan
 
     steps:
       - uses: actions/download-artifact@v4
@@ -94,7 +157,7 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Extract OWASP Vulnerabilities
+      - name: Extract Vulnerabilities
         run: |
           mkdir -p processed
 
@@ -103,54 +166,30 @@ jobs:
             [
               .name,
               (.severity // "UNKNOWN"),
-              (.cvssv3.baseScore // 0),
+              (.cvssv3.baseScore // .cvssv2.score // 0),
               (.references[0].url // "N/A")
             ] | @tsv
-          ' owasp/owasp.json > processed/owasp.tsv || true
+          ' owasp/owasp.json > processed/all.tsv || true
 
-      - name: Count Vulnerabilities
+      - name: Count Severity (SAFE)
         run: |
-          mkdir -p processed
-          
-          # Ensure file exists
-          if [ ! -f processed/owasp.tsv ]; then
-            echo "" > processed/owasp.tsv
-          fi
-          
-          # Safe counts
-          TOTAL=$(grep -c . processed/owasp.tsv 2>/dev/null || true)
-          
-          CRITICAL=$(awk -F'\t' '($2=="CRITICAL")||($3>=9){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
-          HIGH=$(awk -F'\t' '($2=="HIGH")||($3>=7&&$3<9){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
-          MEDIUM=$(awk -F'\t' '($2=="MEDIUM")||($3>=4&&$3<7){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
-          LOW=$(awk -F'\t' '($2=="LOW")||($3>0&&$3<4){c++} END{print c+0}' processed/owasp.tsv 2>/dev/null)
-          
-          # Default to 0 if empty
-          TOTAL=${TOTAL:-0}
-          CRITICAL=${CRITICAL:-0}
-          HIGH=${HIGH:-0}
-          MEDIUM=${MEDIUM:-0}
-          LOW=${LOW:-0}
-          
-          # Debug
-          echo "TOTAL=$TOTAL"
-          echo "CRITICAL=$CRITICAL"
-          echo "HIGH=$HIGH"
-          echo "MEDIUM=$MEDIUM"
-          echo "LOW=$LOW"
-          
-          # SAFE export (very important)
-          {
-            echo "TOTAL=$TOTAL"
-            echo "CRITICAL=$CRITICAL"
-            echo "HIGH=$HIGH"
-            echo "MEDIUM=$MEDIUM"
-            echo "LOW=$LOW"
-          } >> $GITHUB_ENV
+          FILE="processed/all.tsv"
 
-      - name: Sort Vulnerabilities
+          TOTAL=$(grep -c . "$FILE" 2>/dev/null || echo 0)
+          CRITICAL=$(awk -F'\t' '($2=="CRITICAL"){c++} END{print c+0}' "$FILE")
+          HIGH=$(awk -F'\t' '($2=="HIGH"){c++} END{print c+0}' "$FILE")
+          MEDIUM=$(awk -F'\t' '($2=="MEDIUM"){c++} END{print c+0}' "$FILE")
+          LOW=$(awk -F'\t' '($2=="LOW"){c++} END{print c+0}' "$FILE")
+
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
+          echo "HIGH=$HIGH" >> $GITHUB_ENV
+          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW=$LOW" >> $GITHUB_ENV
+
+      - name: Sort Data
         run: |
-          sort -t$'\t' -k3 -nr processed/owasp.tsv > processed/sorted.tsv
+          sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -158,16 +197,16 @@ jobs:
           path: processed/
 
 # =========================
-# 🔹 Stage 5: HTML REPORT (FINAL)
+# 🔹 Stage 7: Generate HTML Report
 # =========================
   html-report:
     runs-on: ubuntu-latest
-    needs: process
+    needs: [process, code-scan, git-info]
 
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Generate HTML Report
+      - name: Generate HTML
         run: |
           mkdir -p public
           REPORT=public/security-report.html
@@ -175,66 +214,45 @@ jobs:
           CODE_COUNT=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
 
           cat <<EOF > $REPORT
-          <html>
-          <head>
+          <html><head>
           <style>
           body { font-family: Arial; }
-          table { border-collapse: collapse; width: 100%; }
-          th, td { border: 1px solid black; padding: 8px; }
-          th { background: #333; color: white; }
-          .critical { background: #ff4d4d; }
-          .high { background: #ff944d; }
-          .medium { background: #ffd24d; }
-          .low { background: #d2ff4d; }
-          </style>
-          </head>
+          table { border-collapse: collapse; width:100%; }
+          th,td { border:1px solid black; padding:8px; }
+          .critical {background:#ff4d4d;}
+          .high {background:#ff944d;}
+          .medium {background:#ffd24d;}
+          .low {background:#d2ff4d;}
+          </style></head><body>
 
-          <body>
-          <h1>🚨 Security Dashboard</h1>
+          <h1>🚨 DevSecOps Security Report</h1>
 
           <h2>Summary</h2>
           <table>
-          <tr><th>Type</th><th>Count</th></tr>
-          <tr><td>Total</td><td>${TOTAL:-0}</td></tr>
-          <tr><td>Critical</td><td>${CRITICAL:-0}</td></tr>
-          <tr><td>High</td><td>${HIGH:-0}</td></tr>
-          <tr><td>Medium</td><td>${MEDIUM:-0}</td></tr>
-          <tr><td>Low</td><td>${LOW:-0}</td></tr>
+          <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
+          <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
+          <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
+          <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
+          <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
           <tr><td>Code Issues</td><td>$CODE_COUNT</td></tr>
           </table>
 
-          <h2>📊 All Vulnerabilities (Repo-wide)</h2>
-          <table>
-          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
+          <h2>📊 Vulnerabilities</h2>
+          <table><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
           EOF
 
-          if [ -f processed/sorted.tsv ]; then
-            while IFS=$'\t' read -r id sev score link; do
+          while IFS=$'\t' read -r id sev score link; do
+            CLASS="low"
+            [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
+            [[ "$sev" == "HIGH" ]] && CLASS="high"
+            [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
 
-              CLASS="low"
-              [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
-              [[ "$sev" == "HIGH" ]] && CLASS="high"
-              [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
+            echo "<tr class='$CLASS'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+          done < processed/sorted.tsv
 
-              echo "<tr class='$CLASS'>
-                    <td>$id</td>
-                    <td>$sev</td>
-                    <td>$score</td>
-                    <td><a href='$link'>Link</a></td>
-                    </tr>" >> $REPORT
-
-            done < processed/sorted.tsv
-          else
-            echo "<tr><td colspan='4'>No vulnerabilities found</td></tr>" >> $REPORT
-          fi
-
-          echo "</table>" >> $REPORT
-
-          echo "<h2>💻 Code Issues (All Files)</h2><pre>" >> $REPORT
-          cat code/code.txt >> $REPORT || echo "No code issues" >> $REPORT
-          echo "</pre>" >> $REPORT
-
-          echo "</body></html>" >> $REPORT
+          echo "</table><h2>Git Info</h2><pre>" >> $REPORT
+          cat git/git.txt >> $REPORT
+          echo "</pre></body></html>" >> $REPORT
 
       - uses: actions/upload-artifact@v4
         with:
