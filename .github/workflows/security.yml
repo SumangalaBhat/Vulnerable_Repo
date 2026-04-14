@@ -61,67 +61,67 @@ jobs:
           path: reports/
 
 # 🔹 4. CODEQL (REAL CODE VULNERABILITIES)
-codeql:
-  runs-on: ubuntu-latest
-  needs: build
-
-  permissions:
-    security-events: write
-    contents: read
-
-  steps:
-    - uses: actions/checkout@v4
-
-    # ✅ INIT (IMPORTANT)
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: java
-        build-mode: manual   # 🔥 FIX
-
-    # ✅ REAL BUILD (CodeQL MUST SEE THIS)
-    - name: Build Project (MANDATORY)
-      run: mvn clean compile -DskipTests
-
-    # ✅ ANALYZE
-    - name: Run CodeQL
-      uses: github/codeql-action/analyze@v3
-
-    # ✅ EXPORT SARIF SAFELY
-    - name: Extract SARIF
-      run: |
-        mkdir -p processed
-
-        FILE=$(find . -name "*.sarif" | head -1)
-
-        if [ -f "$FILE" ]; then
-          cp "$FILE" processed/codeql.sarif
-        else
-          echo '{"runs":[]}' > processed/codeql.sarif
-        fi
+  codeql:
+    runs-on: ubuntu-latest
+    needs: build
+  
+    permissions:
+      security-events: write
+      contents: read
+  
+    steps:
+      - uses: actions/checkout@v4
+  
+      # ✅ INIT (IMPORTANT)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          build-mode: manual   # 🔥 FIX
+  
+      # ✅ REAL BUILD (CodeQL MUST SEE THIS)
+      - name: Build Project (MANDATORY)
+        run: mvn clean compile -DskipTests
+  
+      # ✅ ANALYZE
+      - name: Run CodeQL
+        uses: github/codeql-action/analyze@v3
+  
+      # ✅ EXPORT SARIF SAFELY
+      - name: Extract SARIF
+        run: |
+          mkdir -p processed
+  
+          FILE=$(find . -name "*.sarif" | head -1)
+  
+          if [ -f "$FILE" ]; then
+            cp "$FILE" processed/codeql.sarif
+          else
+            echo '{"runs":[]}' > processed/codeql.sarif
+          fi
 
     # ✅ PARSE RESULTS
-    - name: Extract Vulnerabilities
-      run: |
-        jq -r '
-          .runs[].results[]? |
-          [
-            .ruleId,
-            .level,
-            .message.text,
-            .locations[0].physicalLocation.artifactLocation.uri
-          ] | @tsv
-        ' processed/codeql.sarif > processed/codeql.tsv || true
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: codeql
-        path: processed/
-
-    - uses: actions/upload-artifact@v4
-      with:
-         name: codeql
-         path: processed/
+      - name: Extract Vulnerabilities
+        run: |
+          jq -r '
+            .runs[].results[]? |
+            [
+              .ruleId,
+              .level,
+              .message.text,
+              .locations[0].physicalLocation.artifactLocation.uri
+            ] | @tsv
+          ' processed/codeql.sarif > processed/codeql.tsv || true
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codeql
+          path: processed/
+  
+      - uses: actions/upload-artifact@v4
+        with:
+           name: codeql
+           path: processed/
 
 # 🔹 5. GIT + PR INFO
   git-info:
