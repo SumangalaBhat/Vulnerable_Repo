@@ -102,15 +102,40 @@ jobs:
           echo "🔍 Scanning ALL files..."
           
           # Format: RULE | SEVERITY | FILE | LINE | CODE
+          
           grep -RniE "password|secret|apikey|token|exec\(|SELECT .* \+" . | while read line; do
+          
             FILE=$(echo "$line" | cut -d: -f1)
             LINE=$(echo "$line" | cut -d: -f2)
             CODE=$(echo "$line" | cut -d: -f3-)
           
-            RULE="Sensitive Pattern"
-            SEVERITY="MEDIUM"
+         
+            # 🔴 HIGH Severity
+            if echo "$CODE" | grep -qiE "password\s*=|secret\s*=|apikey\s*=|token\s*="; then
+              RULE="Hardcoded Secret"
+              SEVERITY="HIGH"
+          
+            elif echo "$CODE" | grep -qi "Runtime.getRuntime().exec"; then
+              RULE="Command Injection Risk"
+              SEVERITY="HIGH"
+          
+            # 🟠 MEDIUM Severity
+            elif echo "$CODE" | grep -qiE "SELECT .* \+"; then
+              RULE="SQL Injection Risk"
+              SEVERITY="MEDIUM"
+          
+            elif echo "$CODE" | grep -qiE "password|secret|apikey|token"; then
+              RULE="Sensitive Data Exposure"
+              SEVERITY="MEDIUM"
+          
+            # 🟢 LOW Severity
+            else
+              RULE="General Code Smell"
+              SEVERITY="LOW"
+            fi
           
             echo -e "$RULE\t$SEVERITY\t$FILE\t$LINE\t$CODE"
+          
           done > reports/code.tsv || true
 
       - uses: actions/upload-artifact@v4
