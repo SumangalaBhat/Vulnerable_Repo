@@ -46,83 +46,69 @@ jobs:
 # =========================
   codeql:
     runs-on: ubuntu-latest
-    needs: build
-    continue-on-error: true   # ✅ don't break pipeline
+  
+    permissions:
+      security-events: write
+      contents: read
   
     steps:
       - uses: actions/checkout@v4
   
+      # ✅ Setup Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
   
-      # =========================
-      # ✅ INIT
-      # =========================
+      # ✅ DEBUG: Find project structure
+      - name: Detect project
+        run: |
+          echo "==== Searching for pom.xml ===="
+          find . -name "pom.xml"
+  
+          echo "==== Searching Java files ===="
+          find . -name "*.java" | head -20
+  
+      # ✅ INIT CodeQL
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: java
           build-mode: manual
   
-      # =========================
-      # 🔥 CRITICAL BUILD STEP
-      # =========================
-      - name: Build (VISIBLE TO CODEQL)
+      # ✅ SMART BUILD (CRITICAL FIX)
+      - name: Build project (auto-detect)
         run: |
-          echo "🔍 Finding Maven projects..."
+          set -e
   
-          POMS=$(find . -name "pom.xml")
+          POM=$(find . -name "pom.xml" | head -1)
   
-          if [ -z "$POMS" ]; then
-            echo "❌ No pom.xml found → skipping CodeQL safely"
-            exit 0
+          if [ -z "$POM" ]; then
+            echo "❌ No pom.xml found"
+            exit 1
           fi
   
-          SUCCESS_BUILD=0
+          DIR=$(dirname "$POM")
+          echo "📦 Building project in: $DIR"
   
-          for pom in $POMS; do
-            DIR=$(dirname "$pom")
-            echo "🚀 Building $DIR"
+          cd "$DIR"
   
-            cd "$DIR"
+          mvn -B clean compile -DskipTests
   
-            mvn clean compile -DskipTests
-  
-            if [ $? -eq 0 ]; then
-              echo "✅ Build success in $DIR"
-              SUCCESS_BUILD=1
-            else
-              echo "⚠️ Build failed in $DIR"
-            fi
-  
-            cd - > /dev/null
-          done
-  
-          if [ "$SUCCESS_BUILD" -eq 0 ]; then
-            echo "❌ No successful builds → CodeQL will fail → skipping safely"
-            exit 0
-          fi
-  
-      # =========================
-      # ✅ VERIFY BUILD OUTPUT
-      # =========================
-      - name: Verify compiled classes
-        run: |
+          echo "==== Checking compiled classes ===="
           COUNT=$(find . -name "*.class" | wc -l)
   
-          echo "Compiled classes count: $COUNT"
+          echo "Compiled classes: $COUNT"
   
           if [ "$COUNT" -eq 0 ]; then
-            echo "⚠️ No classes found → skipping CodeQL"
-            exit 0
+            echo "❌ Build failed → No .class files"
+            exit 1
           fi
   
-      # =========================
+          echo "✅ Build successful"
+  
       # ✅ ANALYZE
-      # =========================
       - name: Analyze
         uses: github/codeql-action/analyze@v3
 
