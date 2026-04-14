@@ -2,9 +2,9 @@ name: 🚨 DevSecOps Ultimate Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 permissions:
   contents: write
@@ -280,6 +280,17 @@ jobs:
         run: |
           echo "<h1>🌿 Dashboards</h1>" > public/index.html
           echo "<a href='./dev/'>DEV Dashboard</a>" >> public/index.html
+      - name: Create Root Index
+        run: |
+                cat <<EOF > public/index.html
+                <html><body>
+                <h1>🌿 Security Dashboards</h1>
+                <ul>
+                  <li><a href="./main/">Main Dashboard</a></li>
+                  <li><a href="./dev/">Dev Dashboard</a></li>
+                </ul>
+                </body></html>
+                EOF
   
       # 🔹 Upload Pages artifact
       - name: Upload Pages Artifact
@@ -302,6 +313,17 @@ jobs:
   
       - name: Deploy
         uses: actions/deploy-pages@v4
+
+      - name: Prepare Branch Dashboards
+        run: |
+            mkdir -p public/dev
+            mkdir -p public/main
+        
+            # Copy same report to both (or customize if needed)
+            cp public/security-report.html public/dev/index.html
+            cp public/security-report.html public/main/index.html
+
+
 
 # =========================
 # 🔹 Stage 8: Block Merge if HIGH issues
