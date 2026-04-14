@@ -143,7 +143,7 @@ jobs:
       - name: Extract Vulnerabilities (Accurate)
         run: |
           mkdir -p processed
-  
+      
           # 🔹 OWASP extraction
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
@@ -154,7 +154,7 @@ jobs:
               (.references[0].url // "N/A")
             ] | @tsv
           ' owasp/owasp.json > processed/owasp.tsv || true
-  
+      
           # 🔹 Trivy extraction
           jq -r '
             .Results[]?.Vulnerabilities[]? |
@@ -170,28 +170,28 @@ jobs:
               (.PrimaryURL // "N/A")
             ] | @tsv
           ' trivy/trivy.json > processed/trivy.tsv || true
-  
+      
           # 🔹 Merge
           cat processed/owasp.tsv processed/trivy.tsv > processed/all.tsv
-  
-          # 🔥 Count logic
+      
           TOTAL=$(wc -l < processed/all.tsv || echo 0)
-  
+      
           CRITICAL=$(awk -F'\t' '($2=="CRITICAL") || ($3+0 >= 9){c++} END{print c+0}' processed/all.tsv)
           HIGH=$(awk -F'\t' '($2=="HIGH") || ($3+0 >=7 && $3+0<9){c++} END{print c+0}' processed/all.tsv)
           MEDIUM=$(awk -F'\t' '($2=="MEDIUM") || ($3+0 >=4 && $3+0<7){c++} END{print c+0}' processed/all.tsv)
           LOW=$(awk -F'\t' '($2=="LOW") || ($3+0 >0 && $3+0<4){c++} END{print c+0}' processed/all.tsv)
-  
+      
           echo "TOTAL=$TOTAL" >> $GITHUB_ENV
           echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
           echo "HIGH=$HIGH" >> $GITHUB_ENV
           echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
           echo "LOW=$LOW" >> $GITHUB_ENV
   
-          - uses: actions/upload-artifact@v4
-            with:
-              name: processed
-              path: processed/
+      - name: Upload Processed Data
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed
+          path: processed/
 
 # 🔹 Stage 7: HTML Dashboard (FINAL OUTPUT)
   html-report:
