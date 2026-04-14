@@ -228,29 +228,32 @@ jobs:
       
           echo "==== DEBUG DATA ===="
           cat processed/all.tsv || true
-
-      - name: Calculate Vulnerability Counts
+      - name: Calculate Vulnerabilities
         run: |
-          TOTAL=$(wc -l < processed/all.tsv || echo 0)
+          TOTAL=$(grep -c . processed/all.tsv || echo 0)
       
           CRITICAL=$(awk -F'\t' '
-            ($2=="CRITICAL") || ($3+0 >= 9)
-            {c++} END{print c+0}
+            BEGIN{c=0}
+            NF>=3 && (($2=="CRITICAL") || ($3+0 >= 9)) {c++}
+            END{print c}
           ' processed/all.tsv)
       
           HIGH=$(awk -F'\t' '
-            ($2=="HIGH") || ($3+0 >=7 && $3+0<9)
-            {c++} END{print c+0}
+            BEGIN{c=0}
+            NF>=3 && (($2=="HIGH") || ($3+0 >=7 && $3+0<9)) {c++}
+            END{print c}
           ' processed/all.tsv)
       
           MEDIUM=$(awk -F'\t' '
-            ($2=="MEDIUM") || ($3+0 >=4 && $3+0<7)
-            {c++} END{print c+0}
+            BEGIN{c=0}
+            NF>=3 && (($2=="MEDIUM") || ($3+0 >=4 && $3+0<7)) {c++}
+            END{print c}
           ' processed/all.tsv)
       
           LOW=$(awk -F'\t' '
-            ($2=="LOW") || ($3+0 >0 && $3+0<4)
-            {c++} END{print c+0}
+            BEGIN{c=0}
+            NF>=3 && (($2=="LOW") || ($3+0 >0 && $3+0<4)) {c++}
+            END{print c}
           ' processed/all.tsv)
       
           echo "TOTAL=$TOTAL" >> $GITHUB_ENV
@@ -261,18 +264,34 @@ jobs:
       
           echo "✅ FINAL COUNTS:"
           echo "Critical=$CRITICAL High=$HIGH Medium=$MEDIUM Low=$LOW"
+      - name: Sort Vulnerabilities by CVSS
+        run: |
+          sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
+      
+      - name: Extract Top Critical
+        run: |
+          awk -F'\t' 'NF>=3 && (($2=="CRITICAL") || ($3+0 >=9))' processed/sorted.tsv | head -5 > processed/top-critical.tsv
 
-          - name: Sort Vulnerabilities by CVSS
-            run: |
-              sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
+      - name: Extract Top Critical
+        run: |
+           awk -F'\t' '($2=="CRITICAL") || ($3+0 >=9)' processed/sorted.tsv | head -5 > processed/top-critical.tsv
 
-          - name: Extract Top Critical
-            run: |
-              awk -F'\t' '($2=="CRITICAL") || ($3+0 >=9)' processed/sorted.tsv | head -5 > processed/top-critical.tsv
-    
-          - name: Upload Processed Data
-            uses: actions/upload-artifact@v4
-            with:
+      - name: Clean Env File
+        run: |
+          sed -i '/CVE-/d' $GITHUB_ENV || true
+
+      - name: Debug Output
+        run: |
+          echo "===== DATA ====="
+          cat processed/all.tsv || true
+      
+          echo "===== COUNTS ====="
+          echo "TOTAL=$TOTAL"
+          echo "CRITICAL=$CRITICAL"
+  
+      - name: Upload Processed Data
+        uses: actions/upload-artifact@v4
+        with:
               name: processed
               path: processed/
 
