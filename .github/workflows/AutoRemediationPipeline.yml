@@ -212,22 +212,31 @@ jobs:
 # =========================
 # 🔹 Stage 7: HTML Report + GitHub Pages
 # =========================
+# =========================
+# 🔹 Stage 7: HTML Report + GitHub Pages
+# =========================
   dashboard:
     runs-on: ubuntu-latest
     needs: [process, code-scan, git-info]
-
+    if: always()   # ✅ IMPORTANT (continue even if scan fails)
+  
+    permissions:
+      pages: write
+      id-token: write
+  
     steps:
       - uses: actions/download-artifact@v4
-
-      - name: Generate HTML
+  
+      # 🔹 Generate HTML
+      - name: Generate HTML Report
         run: |
           mkdir -p public
-          REPORT=public/index.html
-
+          REPORT=public/security-report.html
+  
           cat <<EOF > $REPORT
           <html><body>
-          <h1>🚨 Security Dashboard</h1>
-
+          <h1>🚨 Security Dashboard (DEV)</h1>
+  
           <h2>Summary</h2>
           <table border="1">
           <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
@@ -236,32 +245,63 @@ jobs:
           <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
           <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
           </table>
-
+  
           <h2>💻 Code Issues</h2>
           <table border="1">
           <tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>
           EOF
-
+  
           if [ -f code/code.tsv ]; then
             while IFS=$'\t' read -r r s f l c; do
               echo "<tr><td>$r</td><td>$s</td><td>$f</td><td>$l</td><td><pre>$c</pre></td></tr>" >> $REPORT
             done < code/code.tsv
+          else
+            echo "<tr><td colspan='5'>No issues found</td></tr>" >> $REPORT
           fi
-
+  
           echo "</table><h2>Git Info</h2><pre>" >> $REPORT
-          cat git/git.txt >> $REPORT
+  
+          if [ -f git/git.txt ]; then
+            cat git/git.txt >> $REPORT
+          else
+            echo "No git info available" >> $REPORT
+          fi
+  
           echo "</pre></body></html>" >> $REPORT
-
-      - uses: actions/upload-pages-artifact@v3
+  
+      # 🔹 Create DEV folder explicitly
+      - name: Prepare DEV Branch Dashboard
+        run: |
+          mkdir -p public/dev
+          cp public/security-report.html public/dev/index.html
+  
+      # 🔹 (Optional) Root index for navigation
+      - name: Create Root Index
+        run: |
+          echo "<h1>🌿 Dashboards</h1>" > public/index.html
+          echo "<a href='./dev/'>DEV Dashboard</a>" >> public/index.html
+  
+      # 🔹 Upload Pages artifact
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
   deploy-pages:
     needs: dashboard
     runs-on: ubuntu-latest
-
+    if: always()   # ✅ ensure deploy always happens
+  
+    permissions:
+      pages: write
+      id-token: write
+  
     steps:
-      - uses: actions/deploy-pages@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+  
+      - name: Deploy
+        uses: actions/deploy-pages@v4
 
 # =========================
 # 🔹 Stage 8: Block Merge if HIGH issues
