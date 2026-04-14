@@ -7,12 +7,11 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  security-events: write
 
 jobs:
 
-# 🔹 Stage 1: Build
+# 🔹 1. BUILD
   build:
     runs-on: ubuntu-latest
     steps:
@@ -23,85 +22,110 @@ jobs:
           java-version: 11
       - run: mvn clean install -DskipTests
 
-# 🔹 Stage 2: OWASP Scan (SAFE MODE)
-  owasp-scan:
+# 🔹 2. OWASP SCAN
+  owasp:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OWASP (Never Fail)
-        run: |
+      - run: |
           mkdir -p reports
-
           mvn org.owasp:dependency-check-maven:check \
             -Dformat=JSON \
-            -DscanSet=ALL \
-            -DautoUpdate=false \
-            -DfailOnError=false \
-            || true
+            -DfailOnError=false || true
 
-          if [ -f target/dependency-check-report.json ]; then
-            cp target/dependency-check-report.json reports/owasp.json
-          else
-            echo '{"dependencies":[]}' > reports/owasp.json
-          fi
+          cp target/dependency-check-report.json reports/owasp.json || echo '{"dependencies":[]}' > reports/owasp.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: owasp
           path: reports/
 
-# 🔹 Stage 3: TRIVY FALLBACK SCAN (ALWAYS WORKS)
-  trivy-scan:
+# 🔹 3. TRIVY
+  trivy:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Trivy (Stable)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl
-      
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
-      
-          trivy --version
-
-      - name: Run Trivy FS Scan
-        run: |
+      - run: |
+          sudo apt-get update && sudo apt-get install -y curl
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
           mkdir -p reports
-          trivy fs --format json -o reports/trivy.json . || true
+          ./bin/trivy fs --format json -o reports/trivy.json . || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: trivy
           path: reports/
 
-# 🔹 Stage 4: Code Scan
-  code-scan:
-    runs-on: ubuntu-latest
-    needs: build
+# 🔹 4. CODEQL (REAL CODE VULNERABILITIES)
+codeql:
+  runs-on: ubuntu-latest
+  needs: build
 
-    steps:
-      - uses: actions/checkout@v4
+  permissions:
+    security-events: write
+    contents: read
 
-      - run: |
-          mkdir -p reports
-          grep -RniE "password|secret|apikey|token" . > reports/code.txt || true
+  steps:
+    - uses: actions/checkout@v4
+
+    # ✅ INIT (IMPORTANT)
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: java
+        build-mode: manual   # 🔥 FIX
+
+    # ✅ REAL BUILD (CodeQL MUST SEE THIS)
+    - name: Build Project (MANDATORY)
+      run: mvn clean compile -DskipTests
+
+    # ✅ ANALYZE
+    - name: Run CodeQL
+      uses: github/codeql-action/analyze@v3
+
+    # ✅ EXPORT SARIF SAFELY
+    - name: Extract SARIF
+      run: |
+        mkdir -p processed
+
+        FILE=$(find . -name "*.sarif" | head -1)
+
+        if [ -f "$FILE" ]; then
+          cp "$FILE" processed/codeql.sarif
+        else
+          echo '{"runs":[]}' > processed/codeql.sarif
+        fi
+
+    # ✅ PARSE RESULTS
+    - name: Extract Vulnerabilities
+      run: |
+        jq -r '
+          .runs[].results[]? |
+          [
+            .ruleId,
+            .level,
+            .message.text,
+            .locations[0].physicalLocation.artifactLocation.uri
+          ] | @tsv
+        ' processed/codeql.sarif > processed/codeql.tsv || true
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: codeql
+        path: processed/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: code
-          path: reports/
+          name: codeql
+          path: processed/
 
-# 🔹 Stage 5: Git Info (Latest Changes Only)
+# 🔹 5. GIT + PR INFO
   git-info:
     runs-on: ubuntu-latest
-    needs: build
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,277 +134,150 @@ jobs:
       - run: |
           mkdir -p reports
 
-          COMMIT=$(git log -1 --pretty=format:"%H")
-          AUTHOR=$(git log -1 --pretty=format:"%an")
-          EMAIL=$(git log -1 --pretty=format:"%ae")
-          MSG=$(git log -1 --pretty=format:"%s")
+          echo "Commit: $(git log -1 --pretty=%H)" > reports/git.txt
+          echo "Author: $(git log -1 --pretty=%an)" >> reports/git.txt
+          echo "Email: $(git log -1 --pretty=%ae)" >> reports/git.txt
+          echo "Message: $(git log -1 --pretty=%s)" >> reports/git.txt
 
-          echo "Commit: $COMMIT" > reports/git.txt
-          echo "Author: $AUTHOR" >> reports/git.txt
-          echo "Email: $EMAIL" >> reports/git.txt
-          echo "Message: $MSG" >> reports/git.txt
+          echo "PR: ${{ github.event.pull_request.number || 'N/A' }}" >> reports/git.txt
 
           echo "Changed Files:" >> reports/git.txt
-          git diff-tree --no-commit-id --name-only -r $COMMIT >> reports/git.txt
+          git diff-tree --no-commit-id --name-only -r HEAD >> reports/git.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: git
           path: reports/
 
-# 🔹 Stage 6: Merge + Smart Parsing
+# 🔹 6. PROCESS DATA
   process:
     runs-on: ubuntu-latest
-    needs: [owasp-scan, trivy-scan]   # 🔥 VERY IMPORTANT
-  
+    needs: [owasp, trivy, codeql]
+
     steps:
       - uses: actions/download-artifact@v4
-  
-      - name: Install jq
-        run: sudo apt-get install -y jq
-  
-      # ✅ 👉 ADD YOUR STEP HERE
-      - name: Extract Vulnerabilities (Accurate)
-        run: |
-          mkdir -p processed
-      
-          # 🔹 OWASP extraction
-          jq -r '
-            .dependencies[]?.vulnerabilities[]? |
-            [
-              .name,
-              (.severity // "UNKNOWN"),
-              (.cvssv3.baseScore // .cvssv2.score // 0),
-              (.references[0].url // "N/A")
-            ] | @tsv
-          ' owasp/owasp.json > processed/owasp.tsv || true
-      
-          # 🔹 Trivy extraction
-          jq -r '
-            .Results[]?.Vulnerabilities[]? |
-            [
-              .VulnerabilityID,
-              (.Severity // "UNKNOWN"),
-              (
-                .CVSS.nvd.V3Score //
-                .CVSS.redhat.V3Score //
-                .CVSS.ghsa.V3Score //
-                0
-              ),
-              (.PrimaryURL // "N/A")
-            ] | @tsv
-          ' trivy/trivy.json > processed/trivy.tsv || true
-      
-          # 🔹 Merge
-          cat processed/owasp.tsv processed/trivy.tsv > processed/all.tsv
-      
-          TOTAL=$(wc -l < processed/all.tsv || echo 0)
-      
-          CRITICAL=$(awk -F'\t' '($2=="CRITICAL") || ($3+0 >= 9){c++} END{print c+0}' processed/all.tsv)
-          HIGH=$(awk -F'\t' '($2=="HIGH") || ($3+0 >=7 && $3+0<9){c++} END{print c+0}' processed/all.tsv)
-          MEDIUM=$(awk -F'\t' '($2=="MEDIUM") || ($3+0 >=4 && $3+0<7){c++} END{print c+0}' processed/all.tsv)
-          LOW=$(awk -F'\t' '($2=="LOW") || ($3+0 >0 && $3+0<4){c++} END{print c+0}' processed/all.tsv)
-      
-      - name: Safe Export Variables
-        run: |
-          # Remove any accidental invalid env lines
-          sed -i '/CVE-/d' $GITHUB_ENV || true
-      
-          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
-          echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW=$LOW" >> $GITHUB_ENV
 
-      - name: Normalize + Merge Vulnerabilities
+      - run: sudo apt-get install -y jq bc
+
+      - name: Extract + Merge Vulnerabilities
         run: |
           mkdir -p processed
-      
-          # 🔹 Normalize OWASP
+
+          # OWASP
           jq -r '
             .dependencies[]?.vulnerabilities[]? |
             [
               .name,
-              ((.severity // "UNKNOWN") | ascii_upcase),
-              (.cvssv3.baseScore // .cvssv2.score // 0),
+              (.severity | ascii_upcase),
+              (.cvssv3.baseScore // 0),
               (.references[0].url // "N/A")
             ] | @tsv
           ' owasp/owasp.json > processed/owasp.tsv || true
-      
-          # 🔹 Normalize Trivy
+
+          # TRIVY
           jq -r '
             .Results[]?.Vulnerabilities[]? |
             [
               .VulnerabilityID,
-              ((.Severity // "UNKNOWN") | ascii_upcase),
-              (
-                .CVSS.nvd.V3Score //
-                .CVSS.redhat.V3Score //
-                .CVSS.ghsa.V3Score //
-                0
-              ),
+              (.Severity | ascii_upcase),
+              (.CVSS.nvd.V3Score // 0),
               (.PrimaryURL // "N/A")
             ] | @tsv
           ' trivy/trivy.json > processed/trivy.tsv || true
-      
-          # 🔹 Merge + remove empty lines
+
           cat processed/owasp.tsv processed/trivy.tsv | grep -v '^$' > processed/all.tsv
-      
-          echo "==== DEBUG DATA ===="
-          cat processed/all.tsv || true
-      - name: Calculate Vulnerabilities
+
+      - name: Count Vulnerabilities
         run: |
           TOTAL=$(grep -c . processed/all.tsv || echo 0)
-      
-          CRITICAL=$(awk -F'\t' '
-            BEGIN{c=0}
-            NF>=3 && (($2=="CRITICAL") || ($3+0 >= 9)) {c++}
-            END{print c}
-          ' processed/all.tsv)
-      
-          HIGH=$(awk -F'\t' '
-            BEGIN{c=0}
-            NF>=3 && (($2=="HIGH") || ($3+0 >=7 && $3+0<9)) {c++}
-            END{print c}
-          ' processed/all.tsv)
-      
-          MEDIUM=$(awk -F'\t' '
-            BEGIN{c=0}
-            NF>=3 && (($2=="MEDIUM") || ($3+0 >=4 && $3+0<7)) {c++}
-            END{print c}
-          ' processed/all.tsv)
-      
-          LOW=$(awk -F'\t' '
-            BEGIN{c=0}
-            NF>=3 && (($2=="LOW") || ($3+0 >0 && $3+0<4)) {c++}
-            END{print c}
-          ' processed/all.tsv)
-      
+
+          CRITICAL=$(awk -F'\t' '($2=="CRITICAL") || ($3>=9){c++} END{print c+0}' processed/all.tsv)
+          HIGH=$(awk -F'\t' '($2=="HIGH") || ($3>=7 && $3<9){c++} END{print c+0}' processed/all.tsv)
+          MEDIUM=$(awk -F'\t' '($2=="MEDIUM") || ($3>=4 && $3<7){c++} END{print c+0}' processed/all.tsv)
+          LOW=$(awk -F'\t' '($2=="LOW") || ($3>0 && $3<4){c++} END{print c+0}' processed/all.tsv)
+
           echo "TOTAL=$TOTAL" >> $GITHUB_ENV
           echo "CRITICAL=$CRITICAL" >> $GITHUB_ENV
           echo "HIGH=$HIGH" >> $GITHUB_ENV
           echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
           echo "LOW=$LOW" >> $GITHUB_ENV
-      
-          echo "✅ FINAL COUNTS:"
-          echo "Critical=$CRITICAL High=$HIGH Medium=$MEDIUM Low=$LOW"
-      - name: Sort Vulnerabilities by CVSS
-        run: |
-          sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
-      
-      - name: Extract Top Critical
-        run: |
-          awk -F'\t' 'NF>=3 && (($2=="CRITICAL") || ($3+0 >=9))' processed/sorted.tsv | head -5 > processed/top-critical.tsv
 
-      - name: Extract Top Critical
-        run: |
-           awk -F'\t' '($2=="CRITICAL") || ($3+0 >=9)' processed/sorted.tsv | head -5 > processed/top-critical.tsv
+      - run: sort -t$'\t' -k3 -nr processed/all.tsv > processed/sorted.tsv
+      - run: awk -F'\t' '($2=="CRITICAL")||($3>=9)' processed/sorted.tsv | head -5 > processed/top.tsv
 
-      - name: Clean Env File
-        run: |
-          sed -i '/CVE-/d' $GITHUB_ENV || true
-
-      - name: Debug Output
-        run: |
-          echo "===== DATA ====="
-          cat processed/all.tsv || true
-      
-          echo "===== COUNTS ====="
-          echo "TOTAL=$TOTAL"
-          echo "CRITICAL=$CRITICAL"
-  
-      - name: Upload Processed Data
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-              name: processed
-              path: processed/
+          name: processed
+          path: processed/
 
-# 🔹 Stage 7: HTML Dashboard (FINAL OUTPUT)
-  html-report:
+# 🔹 7. HTML REPORT
+  report:
     runs-on: ubuntu-latest
-    needs: [process, code-scan, git-info]
+    needs: [process, git-info]
 
     steps:
       - uses: actions/download-artifact@v4
-    
-      - name: Generate HTML Report
+
+      - name: Generate HTML
         run: |
           mkdir -p public
-          REPORT=public/security-report.html
-      
-          CODE=$(wc -l code/code.txt | awk '{print $1}' || echo 0)
-      
+          REPORT=public/report.html
+
           cat <<EOF > $REPORT
-          <html>
-          <head>
-          <title>Security Dashboard</title>
+          <html><head>
           <style>
           body { font-family: Arial; }
-          table { border-collapse: collapse; width: 100%; }
-          th, td { border: 1px solid black; padding: 8px; }
-          th { background: #333; color: white; }
-          .critical { background: #ff4d4d; }
-          .high { background: #ff944d; }
-          .medium { background: #ffd24d; }
-          .low { background: #d2ff4d; }
-          </style>
-          </head>
-          
-          <body>
-          
-          <h1>🚨 DevSecOps Dashboard</h1>
-          
+          table { border-collapse: collapse; width:100%; }
+          th,td { border:1px solid black; padding:8px; }
+          .critical {background:#ff4d4d;}
+          .high {background:#ff944d;}
+          .medium {background:#ffd24d;}
+          .low {background:#d2ff4d;}
+          </style></head><body>
+
+          <h1>🚨 Security Dashboard</h1>
+
           <h2>Summary</h2>
           <table>
-          <tr><th>Type</th><th>Count</th></tr>
           <tr><td>Total</td><td>${{ env.TOTAL }}</td></tr>
           <tr><td>Critical</td><td>${{ env.CRITICAL }}</td></tr>
           <tr><td>High</td><td>${{ env.HIGH }}</td></tr>
           <tr><td>Medium</td><td>${{ env.MEDIUM }}</td></tr>
           <tr><td>Low</td><td>${{ env.LOW }}</td></tr>
-          <tr><td>Code Issues</td><td>$CODE</td></tr>
           </table>
-          
-          <h2>🔥 Top 5 Critical Vulnerabilities</h2>
-          <table>
-          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit</th></tr>
+
+          <h2>🔥 Top 5 Critical</h2>
+          <table><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Link</th></tr>
           EOF
-          
-              while IFS=$'\t' read -r id sev score link; do
-                echo "<tr class='critical'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
-              done < processed/top-critical.tsv
-          
-              cat <<EOF >> $REPORT
-          </table>
-          
-          <h2>📊 All Vulnerabilities (Sorted by CVSS)</h2>
-          <table>
-          <tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Exploit</th></tr>
-          EOF
-          
-              while IFS=$'\t' read -r id sev score link; do
-          
-                CLASS="low"
-                if [[ "$sev" == "CRITICAL" || $(echo "$score >= 9" | bc) -eq 1 ]]; then CLASS="critical"; fi
-                if [[ "$sev" == "HIGH" ]]; then CLASS="high"; fi
-                if [[ "$sev" == "MEDIUM" ]]; then CLASS="medium"; fi
-          
-                echo "<tr class='$CLASS'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
-          
-              done < processed/sorted.tsv
-          
-              cat <<EOF >> $REPORT
-          </table>
-          
-          <h2>Git Changes</h2>
-          <pre>$(cat git/git.txt)</pre>
-          
-          <h2>Code Issues</h2>
-          <pre>$(cat code/code.txt)</pre>
-          
-          </body>
-          </html>
-          EOF
+
+          while IFS=$'\t' read -r id sev score link; do
+            echo "<tr class='critical'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+          done < processed/top.tsv
+
+          echo "</table><h2>📊 All Vulnerabilities</h2><table>" >> $REPORT
+
+          while IFS=$'\t' read -r id sev score link; do
+            CLASS="low"
+            [[ "$sev" == "CRITICAL" ]] && CLASS="critical"
+            [[ "$sev" == "HIGH" ]] && CLASS="high"
+            [[ "$sev" == "MEDIUM" ]] && CLASS="medium"
+
+            echo "<tr class='$CLASS'><td>$id</td><td>$sev</td><td>$score</td><td><a href='$link'>Link</a></td></tr>" >> $REPORT
+          done < processed/sorted.tsv
+
+          echo "</table><h2>💻 Code Vulnerabilities</h2><table>" >> $REPORT
+
+          while IFS=$'\t' read -r rule sev msg file; do
+            CLASS="low"
+            [[ "$sev" == "error" ]] && CLASS="critical"
+            [[ "$sev" == "warning" ]] && CLASS="high"
+
+            echo "<tr class='$CLASS'><td>$rule</td><td>$sev</td><td>$msg</td><td>$file</td></tr>" >> $REPORT
+          done < codeql/codeql.tsv
+
+          echo "</table><h2>Git Info</h2><pre>" >> $REPORT
+          cat git/git.txt >> $REPORT
+          echo "</pre></body></html>" >> $REPORT
 
       - uses: actions/upload-artifact@v4
         with:
