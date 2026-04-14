@@ -83,18 +83,35 @@ jobs:
             -Dformat=JSON \
             -DfailOnError=false || true
 
-      - name: Extract OWASP data
+      # 🔥 ADD THIS STEP (extract + create TSV safely)
+      - name: Extract OWASP data (SAFE)
         run: |
           mkdir -p processed
-
+  
           FILE=$(find . -name "dependency-check-report.json" | head -1)
-
+  
           if [ -f "$FILE" ]; then
+            echo "✅ Found report: $FILE"
+  
             jq -r '
               .dependencies[]?.vulnerabilities[]? |
               [.name, .severity, .cvssScore, .source] | @tsv
             ' "$FILE" > processed/owasp.tsv || true
+  
+          else
+            echo "⚠️ No report found → creating empty file"
+            touch processed/owasp.tsv
           fi
+  
+          echo "Preview:"
+          cat processed/owasp.tsv || true
+  
+      # 🔥 ADD THIS STEP (VERY IMPORTANT)
+      - name: Upload OWASP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-data
+          path: processed/
 
 # =========================
 # 🔹 Stage 4: Custom Code Scan
@@ -185,6 +202,12 @@ jobs:
           echo "HIGH=$HIGH" >> $GITHUB_ENV
           echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
           echo "LOW=$LOW" >> $GITHUB_ENV
+
+          - name: Download OWASP artifact
+            uses: actions/download-artifact@v4
+            with:
+              name: owasp-data
+              path: processed
 
 # =========================
 # 🔹 Stage 7: HTML Report + GitHub Pages
