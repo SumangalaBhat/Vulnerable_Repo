@@ -339,6 +339,24 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          branch: auto-fix/security-fixes
           base: main
-          title: "Auto Security Fixes"
+          title: "🔐 Auto Security Fixes"
+          commit-message: "[auto-fix] security fixes applied"
+          body: |
+            Automated fixes:
+            - Removed hardcoded secrets
+            - Flagged unsafe code
+      
+            ⚠️ Manual review required for:
+            - SQL Injection
+            - Auth logic
+
+      - name: Safe Branch Setup
+        run: |
+          git fetch origin
+      
+          if git ls-remote --exit-code --heads origin auto-fix/security-fixes; then
+            git checkout -B auto-fix/security-fixes origin/auto-fix/security-fixes
+          else
+            git checkout -b auto-fix/security-fixes origin/main
+          fi
