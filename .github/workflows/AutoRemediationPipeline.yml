@@ -184,24 +184,24 @@ jobs:
           git add .
           git commit -m "🔐 Auto-fix: removed hardcoded secrets & unsafe code" || echo "No changes"
 
-      # 🚀 Create PR
-# 🚀 Create Pull Request (FIXED)
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto-fix/security-fixes
-          base: main   # ✅ FIX: target branch
+          base: main
+          delete-branch: true
+          commit-message: "🔐 Auto Security Fixes"
           title: "🔐 Auto Security Fixes"
           body: |
-            This PR includes automated fixes:
+            Automated fixes applied:
             - Removed hardcoded secrets
             - Externalized credentials
-            - Flagged unsafe exec usage
+            - Flagged unsafe patterns
       
-            ⚠️ Manual review required for:
+            ⚠️ Manual fixes required:
             - SQL Injection
-            - Authentication logic
+            - Auth logic
 
 # =========================
 # 🔹 Stage 7: HTML Report (Optional)
