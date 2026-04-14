@@ -294,6 +294,47 @@ jobs:
         with:
               name: processed
               path: processed/
+  # 🔹 CodeQL Scan (REAL CODE VULNERABILITIES)
+  codeql:
+    runs-on: ubuntu-latest
+  
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+  
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+  
+      - name: Build
+        run: mvn clean install -DskipTests
+  
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Export CodeQL Results
+        run: |
+          mkdir -p reports
+           cat $(find . -name "*.sarif" | head -1) > reports/codeql.sarif
+
+      - name: Extract CodeQL Vulnerabilities
+        run: |
+          jq -r '
+            .runs[].results[] |
+            [
+              .ruleId,
+              .level,
+              .message.text,
+              .locations[0].physicalLocation.artifactLocation.uri
+            ] | @tsv
+          ' codeql/codeql.sarif > processed/codeql.tsv || true
+
+            cat processed/all.tsv processed/codeql.tsv > processed/final.tsv
 
 # 🔹 Stage 7: HTML Dashboard (FINAL OUTPUT)
   html-report:
@@ -371,6 +412,26 @@ jobs:
           
               cat <<EOF >> $REPORT
           </table>
+            echo "<h2>💻 Real Code Vulnerabilities</h2>" >> $REPORT
+            echo "<table border='1'>" >> $REPORT
+            echo "<tr><th>Rule</th><th>Severity</th><th>Description</th><th>File</th></tr>" >> $REPORT
+            
+            while IFS=$'\t' read -r rule sev msg file; do
+            
+              CLASS="low"
+              if [[ "$sev" == "error" ]]; then CLASS="critical"; fi
+              if [[ "$sev" == "warning" ]]; then CLASS="high"; fi
+            
+              echo "<tr class='$CLASS'>
+                    <td>$rule</td>
+                    <td>$sev</td>
+                    <td>$msg</td>
+                    <td>$file</td>
+                    </tr>" >> $REPORT
+            
+            done < processed/codeql.tsv
+            
+            echo "</table>" >> $REPORT
           
           <h2>Git Changes</h2>
           <pre>$(cat git/git.txt)</pre>
