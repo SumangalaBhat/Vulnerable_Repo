@@ -1,0 +1,235 @@
+name: DevSecOps Auto Remediation Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+
+# =========================
+# 🔹 Stage 1: Checkout
+# =========================
+  checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+# =========================
+# 🔹 Stage 2: Setup Java
+# =========================
+  setup-java:
+    runs-on: ubuntu-latest
+    needs: checkout
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+# =========================
+# 🔹 Stage 3: Build
+# =========================
+  build:
+    runs-on: ubuntu-latest
+    needs: setup-java
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Project (safe)
+        run: |
+          mvn clean compile -DskipTests || echo "Build skipped (non-maven repo)"
+
+# =========================
+# 🔹 Stage 4: Code Scan (ALL FILES)
+# =========================
+  code-scan:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan repository (all files)
+        run: |
+          mkdir -p reports
+
+          grep -RniE "password|secret|apikey|token|exec\(|SELECT .* \+" . \
+            --exclude-dir=.git \
+            --exclude-dir=.github \
+            --exclude-dir=target \
+            --exclude="*.sample" | while read line; do
+
+            FILE=$(echo "$line" | cut -d: -f1)
+            LINE=$(echo "$line" | cut -d: -f2)
+            CODE=$(echo "$line" | cut -d: -f3-)
+
+            RULE="General Pattern"
+            SEVERITY="LOW"
+
+            if echo "$CODE" | grep -qiE "password\s*=|secret\s*=|apikey\s*=|token\s*="; then
+              RULE="Hardcoded Secret"
+              SEVERITY="HIGH"
+
+            elif echo "$CODE" | grep -qi "Runtime.getRuntime().exec"; then
+              RULE="Command Injection"
+              SEVERITY="HIGH"
+
+            elif echo "$CODE" | grep -qiE "SELECT .* \+"; then
+              RULE="SQL Injection"
+              SEVERITY="MEDIUM"
+
+            elif echo "$CODE" | grep -qiE "password|secret|apikey|token"; then
+              RULE="Sensitive Data Exposure"
+              SEVERITY="MEDIUM"
+            fi
+
+            echo -e "$RULE\t$SEVERITY\t$FILE\t$LINE\t$CODE"
+
+          done > reports/code.tsv || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-scan
+          path: reports/
+
+# =========================
+# 🔹 Stage 5: Count Vulnerabilities
+# =========================
+  process:
+    runs-on: ubuntu-latest
+    needs: code-scan
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Count severity
+        run: |
+          FILE="code-scan/code.tsv"
+
+          touch $FILE
+
+          TOTAL=$(grep -c . "$FILE" || true)
+          HIGH=$(awk -F'\t' '$2=="HIGH"{c++} END{print c+0}' "$FILE")
+          MEDIUM=$(awk -F'\t' '$2=="MEDIUM"{c++} END{print c+0}' "$FILE")
+          LOW=$(awk -F'\t' '$2=="LOW"{c++} END{print c+0}' "$FILE")
+
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "HIGH=$HIGH" >> $GITHUB_ENV
+          echo "MEDIUM=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW=$LOW" >> $GITHUB_ENV
+
+      - name: Debug counts
+        run: |
+          echo "Total=$TOTAL High=$HIGH Medium=$MEDIUM Low=$LOW"
+
+# =========================
+# 🔹 Stage 6: Auto Remediation (SAFE)
+# =========================
+  auto-remediation:
+    runs-on: ubuntu-latest
+    needs: code-scan
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Fix Branch
+        run: |
+          git checkout -b auto-fix/security-fixes || git checkout auto-fix/security-fixes
+
+      # 🔴 Fix properties secrets
+      - name: Fix hardcoded secrets (properties)
+        run: |
+          find . -name "*.properties" -type f | while read file; do
+            sed -i 's/\(password=\).*/\1${DB_PASSWORD}/g' "$file"
+            sed -i 's/\(secret=\).*/\1${SECRET_KEY}/g' "$file"
+          done
+
+      # 🔴 Fix Java secrets
+      - name: Fix hardcoded secrets (Java)
+        run: |
+          find . -name "*.java" -type f | while read file; do
+            sed -i 's/String password *= *".*"/String password = System.getenv("DB_PASSWORD")/g' "$file"
+            sed -i 's/String secret *= *".*"/String secret = System.getenv("SECRET_KEY")/g' "$file"
+          done
+
+      # 🔴 Remove dangerous exec
+      - name: Replace Runtime.exec
+        run: |
+          find . -name "*.java" -type f | while read file; do
+            sed -i 's/Runtime.getRuntime().exec/\/\/ TODO: Fix Command Injection/g' "$file"
+          done
+
+      # 🔄 Commit changes
+      - name: Commit changes
+        run: |
+          git config user.name "security-bot"
+          git config user.email "security@bot.com"
+
+          git add .
+          git commit -m "🔐 Auto-fix: removed hardcoded secrets & unsafe code" || echo "No changes"
+
+      # 🚀 Create PR
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: auto-fix/security-fixes
+          title: "🔐 Auto Security Fixes"
+          body: |
+            Auto-remediation applied:
+            - Removed hardcoded secrets
+            - Externalized credentials
+            - Flagged unsafe exec usage
+
+            ⚠️ Manual fixes required for:
+            - SQL Injection
+            - Authentication logic
+
+# =========================
+# 🔹 Stage 7: HTML Report (Optional)
+# =========================
+  html-report:
+    runs-on: ubuntu-latest
+    needs: process
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Generate HTML report
+        run: |
+          mkdir -p public
+          REPORT=public/index.html
+
+          cat <<EOF > $REPORT
+          <html><body>
+          <h1>Security Report</h1>
+
+          <h2>Summary</h2>
+          <ul>
+            <li>Total: $TOTAL</li>
+            <li>High: $HIGH</li>
+            <li>Medium: $MEDIUM</li>
+            <li>Low: $LOW</li>
+          </ul>
+
+          <h2>Code Issues</h2>
+          <table border="1">
+          <tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Code</th></tr>
+          EOF
+
+          while IFS=$'\t' read -r rule sev file line code; do
+            echo "<tr><td>$rule</td><td>$sev</td><td>$file</td><td>$line</td><td>$code</td></tr>" >> $REPORT
+          done < code-scan/code.tsv
+
+          echo "</table></body></html>" >> $REPORT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: public/
