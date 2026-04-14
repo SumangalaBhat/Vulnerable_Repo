@@ -101,7 +101,7 @@ jobs:
       - name: Scan Java files for custom vulnerabilities
         run: |
           echo "Scanning all .java files for custom vulnerabilities..."
-          FILES=$(find src/main/java -name "*.java")
+          FILES=$(find ./ -name "*.java")
           VULNERABILITIES=0
 
           for FILE in $FILES; do
