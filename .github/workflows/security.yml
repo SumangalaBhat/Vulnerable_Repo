@@ -107,6 +107,44 @@ jobs:
           fi
           echo "✅ Classes found"
           find target/classes | head
+
+      - name: Debug Project Structure
+        run: |
+          echo "==== POM FILES ===="
+          find . -name "pom.xml"
+      
+          echo "==== JAVA FILES ===="
+          find . -name "*.java" | head -20
+      
+          echo "==== SRC STRUCTURE ===="
+          ls -R src || true
+
+      - name: Smart Build (Auto-detect)
+        run: |
+          echo "Finding pom.xml..."
+          POM=$(find . -name pom.xml | head -1)
+      
+          if [ -z "$POM" ]; then
+            echo "❌ No pom.xml found"
+            exit 1
+          fi
+      
+          DIR=$(dirname "$POM")
+          echo "Building in $DIR"
+      
+          cd "$DIR"
+          mvn clean compile -DskipTests
+      
+          echo "Checking compiled classes..."
+          find . -name "*.class" | head
+      
+          COUNT=$(find . -name "*.class" | wc -l)
+          echo "Class count: $COUNT"
+      
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ No classes compiled"
+            exit 1
+          fi
   
       # ✅ ANALYZE
       - name: Run CodeQL
