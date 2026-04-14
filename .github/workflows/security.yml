@@ -364,7 +364,7 @@ jobs:
           path: public/
 
 
-      # =========================
+  # =========================
   # 🔹 Stage 8: Deploy to GitHub Pages
   # =========================
   deploy-pages:
@@ -374,30 +374,28 @@ jobs:
     permissions:
       pages: write
       id-token: write
-      contents: read
-  
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
   
     steps:
-      - name: Download HTML Report
+      - name: Download Report
         uses: actions/download-artifact@v4
         with:
           name: security-dashboard
           path: public
   
-      # ✅ REQUIRED for Pages
+      # ✅ VERY IMPORTANT: must be index.html
+      - name: Rename report
+        run: |
+          if [ -f public/security-report.html ]; then
+            mv public/security-report.html public/index.html
+          fi
+  
       - name: Setup Pages
         uses: actions/configure-pages@v5
   
-      # ✅ Upload site content
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
   
-      # ✅ Deploy
       - name: Deploy to GitHub Pages
-        id: deployment
         uses: actions/deploy-pages@v4
